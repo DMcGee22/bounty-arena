@@ -1,10 +1,9 @@
-// Living biome FX — grass, bushes, neon accents, weather, ambient motion.
-// Visual-only; does not affect hitboxes or movement.
+// Living biome FX — grass, bushes, soft trees, weather. Visual-only.
+// (No neon light pillars / orbiting point lights — those looked bad.)
 
 import * as THREE from '/vendor/three.module.js';
 
 const _tmp = new THREE.Object3D();
-const _col = new THREE.Color();
 
 function hash(x, z, s) {
   let h = (x | 0) * 374761393 + (z | 0) * 668265263 + (s | 0) * 1442695040;
@@ -27,7 +26,6 @@ export class BiomeLife {
 
     this.grass = null;
     this.bushes = null;
-    this.neon = null;
     this.weather = null;
     this.embers = null;
     this.dust = null;
@@ -35,7 +33,6 @@ export class BiomeLife {
     this.wisps = null;
     this.trees = null;
 
-    this._neonLights = [];
     this._builtFor = '';
   }
 
@@ -58,11 +55,9 @@ export class BiomeLife {
   }
 
   clearAll() {
-    for (const k of ['grass', 'bushes', 'neon', 'weather', 'embers', 'dust', 'snow', 'wisps', 'trees']) {
+    for (const k of ['grass', 'bushes', 'weather', 'embers', 'dust', 'snow', 'wisps', 'trees']) {
       this.clearLayer(k);
     }
-    for (const l of this._neonLights) this.root.remove(l);
-    this._neonLights = [];
     this._builtFor = '';
   }
 
@@ -88,11 +83,7 @@ export class BiomeLife {
       this.trees = this._makeSoftTrees(id, low ? 40 : 90);
       this.root.add(this.trees);
     }
-    if (id === 'neon' || id === 'void' || id === 'storm') {
-      this.neon = this._makeNeon(id, low ? 40 : 90);
-      this.root.add(this.neon);
-      this._addNeonLights(id, low ? 4 : 8);
-    }
+    // No floating neon light pillars / point lights — they read as trash props.
     if (id === 'volcanic') {
       this.embers = this._makeParticles(0xff5522, low ? 120 : 280, 0.08);
       this.root.add(this.embers);
@@ -214,41 +205,6 @@ export class BiomeLife {
     return g;
   }
 
-  _makeNeon(themeId, count) {
-    const geo = new THREE.BoxGeometry(0.18, 1.4, 0.18);
-    const mat = new THREE.MeshStandardMaterial({
-      color: themeId === 'void' ? 0x9020ff : 0x00e8ff,
-      emissive: themeId === 'void' ? 0x7010cc : 0x00c0d8,
-      emissiveIntensity: 1.4,
-      roughness: 0.35,
-      metalness: 0.55,
-    });
-    const mesh = new THREE.InstancedMesh(geo, mat, count);
-    mesh.frustumCulled = false;
-    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    mesh.userData.count = count;
-    mesh.userData.kind = 'neon';
-    mesh.userData.mat = mat;
-    _tmp.scale.set(0, 0, 0);
-    _tmp.updateMatrix();
-    for (let i = 0; i < count; i++) mesh.setMatrixAt(i, _tmp.matrix);
-    mesh.instanceMatrix.needsUpdate = true;
-    return mesh;
-  }
-
-  _addNeonLights(themeId, n) {
-    for (let i = 0; i < n; i++) {
-      const c = themeId === 'void'
-        ? new THREE.Color().setHSL(0.78, 0.9, 0.55)
-        : new THREE.Color().setHSL(0.52 + (i % 3) * 0.08, 0.95, 0.55);
-      const l = new THREE.PointLight(c, 1.2, 18, 2);
-      l.userData.baseHue = themeId === 'void' ? 0.78 : 0.52 + (i % 3) * 0.08;
-      l.userData.phase = i * 1.7;
-      this.root.add(l);
-      this._neonLights.push(l);
-    }
-  }
-
   _makeParticles(color, count, size) {
     const geo = new THREE.BufferGeometry();
     const pos = new Float32Array(count * 3);
@@ -300,13 +256,10 @@ export class BiomeLife {
     if (!world) return;
 
     const seed = (world.seed + (world.epoch | 0) * 91) | 0;
-    const id = this.themeId;
 
     if (this.grass) this._scatterGround(this.grass, world, px, pz, seed, 28, 0.55, 1);
     if (this.bushes) this._scatterGround(this.bushes, world, px, pz, seed + 3, 34, 0.35, 0.7);
     if (this.trees) this._scatterTrees(world, px, pz, seed + 9, 48);
-    if (this.neon) this._scatterNeon(world, px, pz, seed + 17, 40);
-    this._updateNeonLights(px, py, pz);
     if (this.particlesEnabled !== false) {
       if (this.embers) this._updateFloatParticles(this.embers, px, py, pz, 22, 0.6, 2.2, true);
       if (this.dust) this._updateFloatParticles(this.dust, px, py, pz, 30, 0.15, 0.5, false);
@@ -315,25 +268,11 @@ export class BiomeLife {
       if (this.weather) this._updateRain(this.weather, px, py, pz, 26);
     }
 
-    // Grass wind sway via material emissive pulse (cheap) + neon hue cycle
-    if (this.neon?.userData?.mat) {
-      const mat = this.neon.userData.mat;
-      const pulse = 0.85 + Math.sin(this.t * 2.4) * 0.45;
-      mat.emissiveIntensity = pulse * 1.5;
-      if (id === 'neon') {
-        mat.emissive.setHSL(0.5 + Math.sin(this.t * 0.7) * 0.08, 0.95, 0.5);
-        mat.color.copy(mat.emissive);
-      } else if (id === 'void') {
-        mat.emissive.setHSL(0.75 + Math.sin(this.t * 0.5) * 0.05, 0.9, 0.48);
-        mat.color.copy(mat.emissive);
-      }
-    }
+    // Soft grass sway only — no emissive pillar/hue thrash
     if (this.grass?.material) {
       const wind = 0.97 + Math.sin(this.t * 1.8) * 0.03;
-      this.grass.material.color.offsetHSL(0, 0, 0); // no-op keep ref
       this.grass.material.emissive = this.grass.material.emissive || new THREE.Color(0x000000);
-      // subtle brightness flicker as wind
-      this.grass.material.emissive.setRGB(0.02 * wind, 0.04 * wind, 0.01);
+      this.grass.material.emissive.setRGB(0.015 * wind, 0.03 * wind, 0.008);
     }
   }
 
@@ -425,55 +364,6 @@ export class BiomeLife {
     }
     trunks.instanceMatrix.needsUpdate = true;
     canopies.instanceMatrix.needsUpdate = true;
-  }
-
-  _scatterNeon(world, px, pz, seed, radius) {
-    const mesh = this.neon;
-    if (!mesh) return;
-    const count = mesh.userData.count | 0;
-    let i = 0;
-    const step = 4.5;
-    for (let z = Math.floor(pz - radius); z <= pz + radius && i < count; z += step) {
-      for (let x = Math.floor(px - radius); x <= px + radius && i < count; x += step) {
-        const jx = x + hash(x, z, seed) * 2;
-        const jz = z + hash(z, x, seed + 1) * 2;
-        if ((jx - px) ** 2 + (jz - pz) ** 2 > radius * radius) continue;
-        if (hash(jx | 0, jz | 0, seed + 2) > 0.5) continue;
-        world.ensureAround(jx, jz, 1);
-        const sy = world.solidSurfaceY(jx, jz);
-        // Prefer near tall structures
-        const h = 0.9 + hash(jx | 0, jz | 0, seed + 3) * 1.8;
-        _tmp.position.set(jx, sy + h * 0.5, jz);
-        _tmp.rotation.set(0, 0, 0);
-        _tmp.scale.set(1, h / 1.4, 1);
-        _tmp.updateMatrix();
-        mesh.setMatrixAt(i++, _tmp.matrix);
-      }
-    }
-    _tmp.scale.set(0, 0, 0);
-    _tmp.position.set(0, -99, 0);
-    _tmp.updateMatrix();
-    while (i < count) mesh.setMatrixAt(i++, _tmp.matrix);
-    mesh.instanceMatrix.needsUpdate = true;
-  }
-
-  _updateNeonLights(px, py, pz) {
-    const n = this._neonLights.length;
-    if (!n) return;
-    for (let i = 0; i < n; i++) {
-      const l = this._neonLights[i];
-      const ang = this.t * 0.35 + l.userData.phase;
-      const r = 8 + (i % 3) * 4;
-      l.position.set(
-        px + Math.cos(ang) * r,
-        py + 2.5 + Math.sin(this.t + i) * 0.8,
-        pz + Math.sin(ang * 1.1) * r
-      );
-      const hue = (l.userData.baseHue + this.t * 0.08 + i * 0.05) % 1;
-      _col.setHSL(hue, 0.95, 0.55);
-      l.color.copy(_col);
-      l.intensity = 0.9 + Math.sin(this.t * 2.2 + i) * 0.45;
-    }
   }
 
   _updateFloatParticles(pts, px, py, pz, radius, vyBase, _lift, swirl) {
