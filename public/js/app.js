@@ -250,7 +250,7 @@ bindSettings();
 
 // ---------- play ----------
 
-$('#btn-play').onclick = async () => {
+async function startMatch({ botArena = false } = {}) {
   authError('');
   if (!window.BountyGame) {
     authError('Game is still loading — try again in a moment.');
@@ -277,8 +277,11 @@ $('#btn-play').onclick = async () => {
       show('lobby');
       enterLobby();
     },
-  });
-};
+  }, { botArena });
+}
+
+$('#btn-play').onclick = () => startMatch({ botArena: false });
+$('#btn-bot-arena')?.addEventListener('click', () => startMatch({ botArena: true }));
 
 $('#btn-broke-deposit') && ($('#btn-broke-deposit').onclick = async () => {
   try {

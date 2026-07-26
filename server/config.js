@@ -22,6 +22,11 @@ module.exports = {
   MAX_MATCH_PLAYERS: 8,        // matches scale out, not up
   ELO_BAND: 300,               // max avg-Elo distance for SBMM placement
 
+  // Bot arena / test mode — server-side AIs, medium → ace skill mix
+  BOT_ARENA_COUNT: 30,
+  BOT_ARENA_MAX_HUMANS: 4,     // friends can pile into the same bot match
+  BOT_RESPAWN_MS: 2200,
+
   // Voxel world (blocks). Generated from a seed on both sides — never sent.
   // Larger footprint than the original 96² so fights have room to breathe
   // without turning into a marathon between spawns.

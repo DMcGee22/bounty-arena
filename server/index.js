@@ -344,7 +344,8 @@ const server = http.createServer(async (req, res) => {
 const wss = new WebSocketServer({ noServer: true });
 
 server.on('upgrade', (req, socket, head) => {
-  const { pathname } = new URL(req.url, 'http://x');
+  const url = new URL(req.url, 'http://x');
+  const { pathname } = url;
   if (pathname !== '/ws') { socket.destroy(); return; }
   const user = currentUser(req);
   if (!user) {
@@ -352,8 +353,9 @@ server.on('upgrade', (req, socket, head) => {
     socket.destroy();
     return;
   }
+  const botArena = url.searchParams.get('mode') === 'bots';
   wss.handleUpgrade(req, socket, head, (ws) => {
-    const player = game.join(user, ws);
+    const player = game.join(user, ws, { botArena });
     if (!player) return;
     ws.isAlivePing = true;
     ws.on('pong', () => { ws.isAlivePing = true; });

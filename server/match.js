@@ -13,14 +13,16 @@ const config = require('./config');
 const wallet = require('./wallet');
 const { db } = require('./db');
 const V = require('../public/js/shared/voxel.js');
+const { BotAI, makeBotRoster } = require('./bots');
 
 class Player {
-  constructor(user, socket, elo) {
+  constructor(user, socket, elo, opts = {}) {
     this.id = user.id;
     this.username = user.username;
     this.pronouns = user.pronouns || '';
     this.socket = socket;
-    this.balance = wallet.getBalance(user.id);
+    this.isBot = !!opts.isBot;
+    this.balance = this.isBot ? 50_000_00 : wallet.getBalance(user.id); // bots: $50k sandbox
     this.elo = elo;
     this.match = null;
 
@@ -80,13 +82,16 @@ const qCreateMatch = db.prepare('INSERT INTO matches DEFAULT VALUES');
 const qCloseMatch = db.prepare(`UPDATE matches SET closed_at = datetime('now') WHERE id = ?`);
 
 class Match {
-  constructor() {
+  constructor(opts = {}) {
     this.dbId = Number(qCreateMatch.run().lastInsertRowid);
+    this.botArena = !!opts.botArena;
     this.seed = (Math.random() * 0x7fffffff) | 0;
     this.epoch = 0;
     this.world = new V.World(config.WORLD_W, config.WORLD_H, config.WORLD_D, this.seed);
     this.world.ensureAround(0, 0, 5);
     this.players = new Map();
+    this.botAIs = new Map(); // id -> BotAI (server-side only)
+    this.nextBotId = -1;     // negative ids never collide with DB users
     this.shots = [];         // tracer events, flushed each tick
     this.explosions = [];    // VFX events flushed each tick
     this.blockChanges = [];  // [[x,y,z,v], ...] flushed each tick
@@ -101,8 +106,79 @@ class Match {
     this.emptySince = Date.now();
     this.closed = false;
     this.nextMorphAt = Date.now() + (config.MAP_MORPH_MS || 90000);
-    this.spawnPracticeDummies();
+    // Practice dummies only in normal matches (bot arena is already crowded)
+    if (!this.botArena) this.spawnPracticeDummies();
     this.seedPowerups();
+    if (this.botArena) {
+      this.fillBots(config.BOT_ARENA_COUNT || 30);
+      console.log(`[match #${this.dbId}] bot arena ready — ${this.botAIs.size} AIs`);
+    }
+  }
+
+  humanCount() {
+    let n = 0;
+    for (const p of this.players.values()) {
+      if (!p.isBot && !p.disconnectedAt) n++;
+    }
+    return n;
+  }
+
+  fillBots(count) {
+    const roster = makeBotRoster(count);
+    for (let i = 0; i < roster.length; i++) {
+      const { name, arch } = roster[i];
+      const id = this.nextBotId--;
+      const fakeUser = { id, username: name, pronouns: arch.id };
+      // Elo band ~1100–1600 so they look mid→strong on the board
+      const botElo = 1100 + Math.floor(Math.random() * 500);
+      const p = new Player(fakeUser, null, botElo, { isBot: true });
+      p.match = this;
+      p.weapon = arch.weapon;
+      for (const wid of config.WEAPON_KEYS) {
+        p.weaponAmmo[wid] = config.WEAPONS[wid].magSize;
+      }
+      this.players.set(p.id, p);
+      this.botAIs.set(p.id, new BotAI(p, arch, i));
+      this.spawn(p);
+    }
+  }
+
+  /** 60Hz-equivalent bot brain + physics (match ticks at 30Hz → 2 steps). */
+  tickBots(now) {
+    if (!this.botAIs.size) return;
+    const steps = 2;
+    for (const [id, ai] of this.botAIs) {
+      const p = ai.p;
+      if (!this.players.has(id)) continue;
+
+      if (!p.alive) {
+        if (p.respawnAt && now >= p.respawnAt) this.spawn(p);
+        continue;
+      }
+
+      // Keep terrain under them
+      this.world.ensureAround(p.x, p.z, 2);
+
+      for (let s = 0; s < steps; s++) {
+        if (!p.alive) break;
+        const inp = ai.buildInput(this, now);
+        p.yaw = inp.yaw;
+        p.pitch = inp.pitch;
+        p.aiming = !!inp.aim;
+        if (inp.weapon && inp.weapon !== p.weapon && config.WEAPONS[inp.weapon]) {
+          this.switchWeapon(p, inp.weapon);
+        }
+        V.step(this.world, p, inp);
+        if (inp.reload) this.startReload(p, now);
+        if (inp.fire) this.tryFire(p, now);
+      }
+
+      if (p.reloadingUntil && now >= p.reloadingUntil) {
+        p.setAmmo(p.weaponDef().magSize);
+        p.reloadingUntil = 0;
+      }
+      if (p.y < config.VOID_Y) this.killByVoid(p, now);
+    }
   }
 
   // Stationary training targets near origin plaza
@@ -423,6 +499,18 @@ class Match {
       return existing;
     }
 
+    if (this.botArena) {
+      const maxH = config.BOT_ARENA_MAX_HUMANS || 4;
+      if (this.humanCount() >= maxH) {
+        this.send(socket, {
+          type: 'error', code: 'FULL',
+          message: 'Bot arena is full of humans — try again later.',
+        });
+        socket.close(4003, 'bot arena full');
+        return null;
+      }
+    }
+
     const p = new Player(user, socket, elo);
     if (p.balance < config.STAKE_CENTS) {
       this.send(socket, { type: 'error', code: 'INSUFFICIENT', message: `You need at least $${(config.STAKE_CENTS / 100).toFixed(2)} to enter the arena.` });
@@ -431,9 +519,11 @@ class Match {
     }
     p.match = this;
     this.players.set(p.id, p);
+    this.emptySince = 0;
     this.sendWelcome(p);
     this.spawn(p);
-    this.broadcast({ type: 'feed', kind: 'join', text: `${p.username} entered the arena` });
+    const where = this.botArena ? 'bot arena' : 'arena';
+    this.broadcast({ type: 'feed', kind: 'join', text: `${p.username} entered the ${where}` });
     return p;
   }
 
@@ -448,6 +538,8 @@ class Match {
       epoch: this.epoch,
       theme: { id: this.world.theme.id, name: this.world.theme.name },
       nextMorphAt: this.nextMorphAt,
+      botArena: !!this.botArena,
+      botCount: this.botAIs.size,
       world: { w: config.WORLD_W, h: config.WORLD_H, d: config.WORLD_D, infinite: true },
       stakeCents: config.STAKE_CENTS,
       constants: {
@@ -563,8 +655,11 @@ class Match {
 
   removePlayer(player, reason) {
     if (!this.players.has(player.id)) return;
+    // Never remove server bots from a bot arena mid-match
+    if (player.isBot && this.botArena) return;
     this.players.delete(player.id);
-    if (this.players.size === 0) this.emptySince = Date.now();
+    this.botAIs.delete(player.id);
+    if (this.humanCount() === 0) this.emptySince = Date.now();
     this.broadcast({ type: 'feed', kind: 'leave', text: `${player.username} ${reason}` });
   }
 
@@ -638,7 +733,8 @@ class Match {
     p.hp = config.PLAYER_MAX_HP;
     p.alive = true;
     p.broke = false;
-    p.weapon = config.DEFAULT_WEAPON;
+    // Bots keep their archetype loadout across respawns
+    if (!p.isBot) p.weapon = config.DEFAULT_WEAPON;
     for (const id of config.WEAPON_KEYS) {
       p.weaponAmmo[id] = config.WEAPONS[id].magSize;
     }
@@ -664,6 +760,8 @@ class Match {
     this.tickChaos(now);
 
     for (const p of this.players.values()) {
+      if (p.isBot) continue; // bots handled in tickBots
+
       if (!p.alive) {
         if (p.respawnAt !== 0 && now >= p.respawnAt) {
           if (p.balance >= config.STAKE_CENTS) this.spawn(p);
@@ -718,9 +816,11 @@ class Match {
       if (p.y < config.VOID_Y) this.killByVoid(p, now);
     }
 
-    // Stream terrain under every living player
+    this.tickBots(now);
+
+    // Stream terrain under every living human (bots already ensureAround)
     for (const p of this.players.values()) {
-      if (p.alive) this.world.ensureAround(p.x, p.z, 3);
+      if (p.alive && !p.isBot) this.world.ensureAround(p.x, p.z, 3);
     }
 
     this.tickDummies(now);
@@ -1100,23 +1200,29 @@ class Match {
 
   damage(victim, killer, dmg, now, headshot, zone, label) {
     victim.hp -= dmg;
-    this.send(victim.socket, {
-      type: 'hurt',
-      hp: Math.max(0, victim.hp),
-      by: killer.username,
-      damage: Math.round(dmg),
-      headshot: !!headshot,
-      zone: zone || null,
-      label: label || null,
-      dir: Math.atan2(killer.x - victim.x, -(killer.z - victim.z)),
-    });
+    if (victim.socket) {
+      this.send(victim.socket, {
+        type: 'hurt',
+        hp: Math.max(0, victim.hp),
+        by: killer.username,
+        damage: Math.round(dmg),
+        headshot: !!headshot,
+        zone: zone || null,
+        label: label || null,
+        dir: Math.atan2(killer.x - victim.x, -(killer.z - victim.z)),
+      });
+    }
     if (victim.hp > 0) return;
     this.registerKill(killer, victim, now, headshot, zone, label);
   }
 
   // Death with no killer: fell into the void. No money moves — you can't lose
   // $3 to nobody, and it stops players farming suicides to grief a match.
-  deathTiming() {
+  deathTiming(isBot) {
+    if (isBot) {
+      const totalS = (config.BOT_RESPAWN_MS || 2200) / 1000;
+      return { fallS: 0.4, cardS: 0.2, specS: 0, totalS };
+    }
     const fallS = config.DEATH_FALL_S ?? 1.5;
     const cardS = config.DEATH_CARD_S ?? 1.0;
     const specS = config.SPECTATE_S ?? 15;
@@ -1132,24 +1238,26 @@ class Match {
     victim.superJumpT = 0;
     victim.overchargeT = 0;
     victim.armorT = 0;
-    const t = this.deathTiming();
+    const t = this.deathTiming(victim.isBot);
     victim.respawnAt = now + t.totalS * 1000;
     this.broadcast({ type: 'feed', kind: 'kill', text: `${victim.username} fell out of the world`, victimId: victim.id });
-    this.send(victim.socket, {
-      type: 'died',
-      by: 'the void',
-      killerId: null,
-      balance: victim.balance,
-      delta: 0,
-      respawnAt: victim.respawnAt,
-      canAfford: victim.balance >= config.STAKE_CENTS,
-      elo: victim.elo,
-      fallS: t.fallS,
-      cardS: t.cardS,
-      spectateS: 0, // no killer to watch
-      x: victim.x, y: victim.y, z: victim.z,
-      yaw: victim.yaw, pitch: victim.pitch,
-    });
+    if (victim.socket) {
+      this.send(victim.socket, {
+        type: 'died',
+        by: 'the void',
+        killerId: null,
+        balance: victim.balance,
+        delta: 0,
+        respawnAt: victim.respawnAt,
+        canAfford: victim.balance >= config.STAKE_CENTS,
+        elo: victim.elo,
+        fallS: t.fallS,
+        cardS: t.cardS,
+        spectateS: 0,
+        x: victim.x, y: victim.y, z: victim.z,
+        yaw: victim.yaw, pitch: victim.pitch,
+      });
+    }
   }
 
   registerKill(killer, victim, now, headshot, zone, label) {
@@ -1160,7 +1268,7 @@ class Match {
     victim.superJumpT = 0;
     victim.overchargeT = 0;
     victim.armorT = 0;
-    const t = this.deathTiming();
+    const t = this.deathTiming(victim.isBot);
     victim.respawnAt = now + t.totalS * 1000;
     victim.sessionDeaths++;
     victim.inputQueue.length = 0;
@@ -1168,15 +1276,30 @@ class Match {
     killer.sessionKills++;
     killer.hp = Math.min(config.PLAYER_MAX_HP, killer.hp + config.KILL_HEAL);
 
-    // THE money moment. Atomic: victim -$3, killer +$3, Elo updated, kill
-    // logged — or none of it.
+    // Money: human↔human full transfer; human kills bot = reward only;
+    // bot kills human = death fee only; bot↔bot = free (sandbox meat grinders).
     let transfer = null;
+    const stake = config.STAKE_CENTS;
     try {
-      transfer = wallet.killTransfer(this.dbId, killer.id, killer.username, victim.id, victim.username, config.STAKE_CENTS);
+      if (!killer.isBot && !victim.isBot) {
+        transfer = wallet.killTransfer(
+          this.dbId, killer.id, killer.username, victim.id, victim.username, stake
+        );
+      } else if (!killer.isBot && victim.isBot) {
+        const after = wallet.killReward(killer.id, stake, `eliminated ${victim.username}`);
+        killer.balance = after;
+        transfer = { killerAfter: after, victimAfter: victim.balance, killerElo: killer.elo, victimElo: victim.elo };
+      } else if (killer.isBot && !victim.isBot) {
+        const after = wallet.deathFee(victim.id, stake, `killed by ${killer.username}`);
+        victim.balance = after;
+        transfer = { killerAfter: killer.balance, victimAfter: after, killerElo: killer.elo, victimElo: victim.elo };
+      }
     } catch (err) {
-      console.error('[match] kill transfer FAILED', { match: this.dbId, killer: killer.id, victim: victim.id, err: err.message });
+      console.error('[match] kill transfer FAILED', {
+        match: this.dbId, killer: killer.id, victim: victim.id, err: err.message,
+      });
     }
-    if (transfer) {
+    if (transfer && !killer.isBot && !victim.isBot) {
       killer.balance = transfer.killerAfter;
       victim.balance = transfer.victimAfter;
       killer.elo = transfer.killerElo;
@@ -1194,14 +1317,14 @@ class Match {
       zone: zone || null,
       label: label || null,
       weapon: killer.weapon,
-      amount: transfer ? config.STAKE_CENTS : 0,
+      amount: transfer ? stake : 0,
       // death pose so other clients can play a fall on the body
       x: victim.x, y: victim.y, z: victim.z,
       yaw: victim.yaw,
     });
     this.send(killer.socket, {
       type: 'balance', balance: killer.balance,
-      delta: transfer ? config.STAKE_CENTS : 0, reason: 'kill', elo: killer.elo,
+      delta: transfer && !killer.isBot ? stake : 0, reason: 'kill', elo: killer.elo,
     });
     this.send(victim.socket, {
       type: 'died',
@@ -1261,6 +1384,7 @@ class Match {
         hs: (p.hasteT || 0) > 0.05,
         oc: (p.overchargeT || 0) > 0.05,
         ar: (p.armorT || 0) > 0.05,
+        bot: !!p.isBot,
       });
     }
     const dummies = this.dummies.map((d) => ({

@@ -2492,8 +2492,14 @@ function discardSocket(socket) {
   }
 }
 
-function connect(newHooks) {
+let joinBotArena = false;
+
+/** @param {{ botArena?: boolean }} [opts] */
+function connect(newHooks, opts = {}) {
   if (newHooks) hooks = newHooks;
+  if (opts && Object.prototype.hasOwnProperty.call(opts, 'botArena')) {
+    joinBotArena = !!opts.botArena;
+  }
   intentionalExit = false;
   clearTimeout(reconnectTimer);
 
@@ -2510,7 +2516,8 @@ function connect(newHooks) {
   Audio.init();
   try { if (localStorage.getItem('bounty.sound') === '0') Audio.setEnabled(false); } catch {}
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const socket = new WebSocket(`${proto}//${location.host}/ws`);
+  const q = joinBotArena ? '?mode=bots' : '';
+  const socket = new WebSocket(`${proto}//${location.host}/ws${q}`);
   ws = socket;
   socket.binaryType = 'arraybuffer';
 
@@ -2592,6 +2599,7 @@ function handleVoiceFrame(bytes) {
 
 function leave() {
   intentionalExit = true;
+  joinBotArena = false;
   clearTimeout(reconnectTimer);
   send({ type: 'leave' });
   discardSocket(ws);
@@ -2691,7 +2699,11 @@ function handleMessage(msg) {
       updateMorphTimerHud();
       updateBuffHud();
       addFeedLine(`◈ SECTOR: ${currentTheme.name}`);
-      addFeedLine('◇ Climb walls · grab pods · survive CHAOS events');
+      if (msg.botArena) {
+        addFeedLine(`◇ BOT ARENA — ${msg.botCount || 30} AI operators (mid→ace skill mix)`);
+      } else {
+        addFeedLine('◇ Climb walls · grab pods · survive CHAOS events');
+      }
       break;
     }
 

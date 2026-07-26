@@ -70,4 +70,26 @@ function history(userId, limit = 25) {
   ).all(userId, limit);
 }
 
-module.exports = { getBalance, deposit, withdraw, killTransfer, history, WalletError };
+// Human ↔ bot sandbox rewards (bots are not ledger users)
+function killReward(userId, cents, ref) {
+  if (!Number.isInteger(cents) || cents <= 0) throw new WalletError('bad amount', 'BAD_AMOUNT');
+  return tx(() => {
+    const after = apply(userId, cents, 'kill', ref ?? null);
+    qBumpKills.run(userId);
+    return after;
+  });
+}
+
+function deathFee(userId, cents, ref) {
+  if (!Number.isInteger(cents) || cents <= 0) throw new WalletError('bad amount', 'BAD_AMOUNT');
+  return tx(() => {
+    const after = apply(userId, -cents, 'death', ref ?? null);
+    qBumpDeaths.run(userId);
+    return after;
+  });
+}
+
+module.exports = {
+  getBalance, deposit, withdraw, killTransfer, killReward, deathFee,
+  history, WalletError,
+};
