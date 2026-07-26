@@ -1,0 +1,200 @@
+/* Home / lobby — MoneyShot-inspired layout, Bounty Arena neon style */
+
+.home-screen {
+  background: #07090e;
+  overflow: hidden;
+}
+.home-bg {
+  position: absolute; inset: 0; pointer-events: none;
+  background:
+    radial-gradient(ellipse 80% 60% at 20% 40%, rgba(255, 197, 61, 0.07), transparent 55%),
+    radial-gradient(ellipse 50% 40% at 80% 20%, rgba(0, 240, 255, 0.05), transparent 50%),
+    linear-gradient(180deg, #0a0c12 0%, #07090e 100%);
+}
+.home-bg::before {
+  content: "";
+  position: absolute; inset: 0;
+  background-image:
+    linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px);
+  background-size: 48px 48px;
+  mask-image: radial-gradient(ellipse at 40% 40%, #000 20%, transparent 70%);
+  opacity: 0.7;
+}
+
+.home-top {
+  position: relative; z-index: 2;
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 22px 32px;
+}
+.home-brand { display: flex; align-items: center; gap: 12px; }
+.home-mark {
+  width: 36px; height: 36px; border-radius: 8px;
+  background: var(--gold); color: #1a1400;
+  font-weight: 900; font-size: 18px;
+  display: grid; place-items: center;
+  box-shadow: 0 0 20px rgba(255,197,61,.35);
+}
+.home-word {
+  font-weight: 900; font-size: 15px; letter-spacing: 0.12em;
+}
+.home-word span { color: var(--gold); }
+.home-node {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 11px; letter-spacing: 0.14em; color: var(--dim);
+}
+.node-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: #39ff9a;
+  box-shadow: 0 0 8px #39ff9a;
+  animation: nodePulse 1.6s ease-in-out infinite;
+}
+@keyframes nodePulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
+.home-main {
+  position: relative; z-index: 2;
+  display: grid;
+  grid-template-columns: 1.2fr 0.85fr;
+  gap: 40px;
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 4vh 36px 60px;
+  align-items: center;
+  min-height: calc(100vh - 80px);
+}
+
+.home-kicker {
+  font-size: 11px; letter-spacing: 0.28em; color: var(--gold);
+  margin-bottom: 18px; font-weight: 700;
+}
+.home-title {
+  font-size: clamp(56px, 9vw, 104px);
+  font-weight: 900; line-height: 0.9;
+  letter-spacing: -0.03em;
+  text-transform: uppercase;
+  text-shadow: 0 0 40px rgba(255,197,61,0.12);
+}
+.home-title span {
+  color: transparent;
+  -webkit-text-stroke: 2px var(--gold);
+  text-shadow: 0 0 28px rgba(255,197,61,0.25);
+}
+.home-blurb {
+  margin-top: 22px; max-width: 420px;
+  color: var(--dim); font-size: 14px; line-height: 1.65;
+}
+.home-actions {
+  display: flex; flex-wrap: wrap; gap: 12px;
+  margin-top: 32px; align-items: center;
+}
+.home-cta {
+  width: auto !important;
+  min-width: 200px;
+  padding: 16px 28px !important;
+  font-size: 15px !important;
+  display: inline-flex; align-items: center; gap: 12px;
+  border-radius: 8px !important;
+}
+.cta-arrow { font-size: 18px; opacity: 0.85; }
+.home-secondary {
+  min-width: 120px;
+  border-color: rgba(255,255,255,0.12);
+  letter-spacing: 0.12em;
+  font-size: 12px;
+  font-weight: 700;
+}
+.home-meta {
+  margin-top: 16px; font-size: 11px; color: var(--dim); letter-spacing: 0.06em;
+}
+.home-meta.dim { opacity: 0.7; margin-top: 6px; }
+
+/* Profile card */
+.home-profile {
+  position: relative;
+  padding: 0;
+  overflow: hidden;
+  border-color: rgba(255,197,61,0.18);
+  background: rgba(14, 16, 22, 0.92);
+  box-shadow: 0 20px 60px rgba(0,0,0,0.45);
+}
+.home-profile::before {
+  content: "";
+  position: absolute; left: 0; right: 0; top: 0; height: 3px;
+  background: linear-gradient(90deg, var(--gold), #00f0ff);
+}
+.home-profile-head {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 18px 20px 8px;
+  font-size: 10px; letter-spacing: 0.18em; color: var(--dim);
+}
+.home-online {
+  display: flex; align-items: center; gap: 6px;
+  color: #39ff9a; font-weight: 700;
+}
+.home-identity {
+  display: flex; gap: 14px; align-items: center;
+  padding: 10px 20px 20px;
+}
+.home-avatar {
+  width: 56px; height: 56px; border-radius: 10px;
+  background: var(--gold); color: #1a1400;
+  font-weight: 900; font-size: 24px;
+  display: grid; place-items: center;
+  box-shadow: 0 0 18px rgba(255,197,61,.3);
+}
+.home-name {
+  font-size: 22px; font-weight: 800; letter-spacing: 0.02em;
+}
+.home-elo {
+  margin-top: 4px; font-size: 12px; color: var(--gold);
+  letter-spacing: 0.14em; font-weight: 700;
+}
+.home-stats {
+  display: grid; grid-template-columns: 1fr 1fr;
+  border-top: 1px solid var(--line);
+}
+.home-stats .stat {
+  padding: 18px 20px;
+  border-bottom: 1px solid var(--line);
+}
+.home-stats .stat:nth-child(odd) { border-right: 1px solid var(--line); }
+.home-stats .stat .v {
+  font-size: 28px; font-weight: 800; color: var(--text);
+}
+.home-stats .stat .l {
+  margin-top: 4px; font-size: 10px; letter-spacing: 0.16em;
+  color: var(--dim); text-transform: uppercase;
+}
+.home-profile-foot {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 14px 20px;
+  font-size: 10px; letter-spacing: 0.12em; color: var(--dim);
+}
+.home-auth-tag { opacity: 0.75; }
+.home-pronouns {
+  padding: 0 20px 18px;
+  border-top: 1px solid var(--line);
+}
+.home-pronouns .setting-row {
+  flex-wrap: wrap; gap: 8px; margin-top: 12px;
+}
+.home-pronouns input { flex: 1; min-width: 120px; }
+
+.settings-box {
+  text-align: left;
+  max-width: 420px;
+}
+.settings-box h2 { color: var(--gold); margin-bottom: 18px; }
+.settings-box .btn-primary { width: 100%; margin-top: 18px; }
+
+@media (max-width: 900px) {
+  .home-main {
+    grid-template-columns: 1fr;
+    padding-top: 2vh;
+    min-height: auto;
+  }
+  .home-title { font-size: clamp(48px, 14vw, 72px); }
+}

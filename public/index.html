@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BOUNTY ARENA — every kill pays</title>
+  <link rel="stylesheet" href="/css/style.css" />
+  <link rel="stylesheet" href="/css/home.css" />
+</head>
+<body>
+  <!-- ============ HOME (no login required) ============ -->
+  <section id="screen-lobby" class="screen home-screen">
+    <div class="home-bg" aria-hidden="true"></div>
+    <header class="home-top">
+      <div class="home-brand">
+        <span class="home-mark">B</span>
+        <span class="home-word">BOUNTY<span>ARENA</span></span>
+      </div>
+      <div class="home-node">
+        <span class="node-dot"></span>
+        <span id="home-node-label">POC / LOCAL / 8 MAX</span>
+      </div>
+    </header>
+
+    <div class="home-main">
+      <div class="home-hero">
+        <p class="home-kicker">LAST SIGNAL PROTOCOL</p>
+        <h1 class="home-title">BOUNTY<br/><span>SHOT.</span></h1>
+        <p class="home-blurb">
+          Server-authoritative arena shooter. Skill-based matchmaking.
+          Every fight is tracked. Bring the heat.
+        </p>
+        <div class="home-actions">
+          <button class="btn btn-play home-cta" id="btn-play">JOIN MATCH <span class="cta-arrow">→</span></button>
+          <button class="btn home-secondary" id="btn-settings">SETTINGS</button>
+        </div>
+        <p class="home-meta" id="arena-status">…</p>
+        <p class="home-meta dim">Minimum 1 player · Maximum 8 · Elo matchmaking</p>
+        <p id="auth-error" class="error hidden"></p>
+      </div>
+
+      <aside class="home-profile card">
+        <div class="home-profile-head">
+          <span class="home-profile-label">PLAYER PROFILE</span>
+          <span class="home-online"><span class="node-dot"></span> ONLINE</span>
+        </div>
+        <div class="home-identity">
+          <div class="home-avatar" id="home-avatar">?</div>
+          <div>
+            <div class="home-name" id="lobby-user">Operator</div>
+            <div class="home-elo" id="home-elo">ELO 1000</div>
+          </div>
+        </div>
+        <div class="home-stats" id="profile-stats"></div>
+        <div class="home-profile-foot">
+          <button class="btn btn-ghost btn-small" id="btn-reset-profile" type="button">NEW OPERATOR</button>
+          <span class="home-auth-tag">AUTH / LOCAL_POC</span>
+        </div>
+        <div id="pronouns-box" class="home-pronouns">
+          <label class="setting-row">Pronouns
+            <input type="text" id="pronouns-input" maxlength="24" placeholder="optional — she/her" />
+            <button class="btn btn-small" id="btn-pronouns" type="button">Save</button>
+          </label>
+        </div>
+      </aside>
+    </div>
+
+    <!-- Hidden legacy hooks so app.js doesn't explode -->
+    <div class="hidden" aria-hidden="true">
+      <span id="lobby-balance">$0.00</span>
+      <span id="payments-mode">sandbox</span>
+      <button id="btn-deposit"></button>
+      <button id="btn-withdraw"></button>
+      <button id="btn-logout"></button>
+      <button id="tab-login"></button>
+      <button id="tab-register"></button>
+      <form id="form-login"></form>
+      <form id="form-register"></form>
+      <input id="crypto-address" />
+      <button id="btn-link-wallet"></button>
+      <p id="crypto-linked"></p>
+      <ul id="profile-recent"></ul>
+      <ul id="tx-list"></ul>
+      <table id="leaderboard"><tbody></tbody></table>
+    </div>
+
+    <!-- Settings overlay -->
+    <div class="overlay hidden" id="overlay-settings">
+      <div class="overlay-box settings-box">
+        <h2>SETTINGS</h2>
+        <label class="setting-row">Graphics
+          <select id="set-quality">
+            <option value="low">Low</option>
+            <option value="medium">Medium</option>
+            <option value="high" selected>High</option>
+          </select>
+        </label>
+        <label class="setting-row">Mouse sens
+          <input type="range" id="set-sens" min="0.4" max="2.2" step="0.05" value="1" />
+          <span id="set-sens-val" class="setting-val">1.00</span>
+        </label>
+        <label class="setting-row">Field of view
+          <input type="range" id="set-fov" min="60" max="100" step="1" value="78" />
+          <span id="set-fov-val" class="setting-val">78°</span>
+        </label>
+        <label class="setting-row check">
+          <input type="checkbox" id="set-particles" checked /> Particle effects
+        </label>
+        <label class="setting-row check">
+          <input type="checkbox" id="set-fps" /> Show FPS
+        </label>
+        <label class="setting-row check">
+          <input type="checkbox" id="set-music" checked /> Combat music
+        </label>
+        <button class="btn btn-primary" id="btn-settings-close" type="button">Done</button>
+      </div>
+    </div>
+
+  </section>
+
+  <!-- ============ GAME ============ -->
+  <section id="screen-game" class="screen hidden">
+    <canvas id="game-canvas"></canvas>
+
+    <div class="hud">
+      <div class="crosshair" id="crosshair"><span></span><span></span><span></span><span></span></div>
+      <div class="scope-overlay hidden" id="scope-overlay">
+        <div class="scope-ring"></div>
+        <div class="scope-cross scope-h"></div>
+        <div class="scope-cross scope-v"></div>
+        <div class="scope-dot"></div>
+      </div>
+      <div class="hitmarker hidden" id="hitmarker"></div>
+      <div class="flash-overlay hidden" id="flash-overlay"></div>
+      <div class="damage-vignette" id="damage-vignette"></div>
+      <div class="combat-grade" id="combat-grade"></div>
+      <div class="dmg-numbers" id="dmg-numbers"></div>
+      <!-- Digital sector morph: every ~2 min the map reshapes -->
+      <div class="morph-overlay hidden" id="morph-overlay" aria-hidden="true">
+        <div class="morph-scan"></div>
+        <div class="morph-grid"></div>
+        <div class="morph-glitch"></div>
+        <div class="morph-copy">
+          <div class="morph-title">SECTOR REALIGN</div>
+          <div class="morph-sub">…</div>
+          <div class="morph-bar"><i></i></div>
+        </div>
+      </div>
+      <div class="hud-sub morph-timer" id="morph-timer" title="Next sector shift">◈ —</div>
+      <div class="hit-dirs" id="hit-dirs">
+        <div class="hd n" data-sector="n"></div>
+        <div class="hd ne" data-sector="ne"></div>
+        <div class="hd e" data-sector="e"></div>
+        <div class="hd se" data-sector="se"></div>
+        <div class="hd s" data-sector="s"></div>
+        <div class="hd sw" data-sector="sw"></div>
+        <div class="hd w" data-sector="w"></div>
+        <div class="hd nw" data-sector="nw"></div>
+      </div>
+      <div class="compass" id="compass">
+        <div class="compass-track" id="compass-track"></div>
+        <div class="compass-notch"></div>
+      </div>
+      <div class="kill-card hidden" id="kill-card">
+        <div class="kc-label">ELIMINATED</div>
+        <div class="kc-name" id="kc-name">—</div>
+        <div class="kc-meta" id="kc-meta"></div>
+      </div>
+      <div class="streak-pop hidden" id="streak-pop"></div>
+
+      <div class="hud-top-left" id="killfeed"></div>
+      <div class="hud-top-right">
+        <div class="hud-sub"><span id="hud-elo">1000</span> Elo · <span id="hud-kd">0 / 0</span> K/D · match <span id="hud-match">—</span></div>
+        <div class="hud-sub" id="hud-net">— ms</div>
+        <div class="hidden" id="hud-balance">$0.00</div>
+        <div class="hud-sub hidden" id="hud-fps">— FPS</div>
+        <div class="hud-streak hidden" id="hud-streak">STREAK <b>0</b></div>
+        <button class="btn btn-ghost btn-small" id="btn-leave">Leave arena</button>
+      </div>
+      <div class="mesh-status hidden" id="mesh-status">Building arena…</div>
+
+      <div class="voice-indicator hidden" id="voice-indicator">
+        <span class="dot"></span><span id="voice-label">MIC LIVE</span>
+      </div>
+      <div class="voice-speakers" id="voice-speakers"></div>
+
+      <div class="chat" id="chat">
+        <div class="chat-log" id="chat-log"></div>
+        <input class="chat-input hidden" id="chat-input" maxlength="120"
+               autocomplete="off" spellcheck="false" placeholder="Say something…" />
+      </div>
+
+      <div class="hud-bottom-left">
+        <div class="hp-row">
+          <span class="hp-label">HP</span>
+          <div class="hp-wrap"><div class="hp-bar" id="hp-bar"></div></div>
+          <span class="hp-num" id="hp-num">100</span>
+        </div>
+        <div class="hud-buffs" id="hud-buffs"></div>
+        <div class="hud-climb hidden" id="hud-climb">▲ CLIMBING</div>
+      </div>
+      <div class="hud-chaos hidden" id="hud-chaos">
+        <div class="ch-kicker">CHAOS EVENT</div>
+        <div class="ch-title">—</div>
+        <div class="ch-blurb"></div>
+        <div class="ch-timer"></div>
+      </div>
+      <div class="hud-bottom-right">
+        <div class="weapon-strip" id="weapon-strip">
+          <button type="button" class="ws-slot active" data-weapon="rifle" tabindex="-1">
+            <span class="ws-key">1</span>
+            <span class="ws-name">RIFLE</span>
+            <span class="ws-mag">24</span>
+          </button>
+          <button type="button" class="ws-slot" data-weapon="smg" tabindex="-1">
+            <span class="ws-key">2</span>
+            <span class="ws-name">SMG</span>
+            <span class="ws-mag">32</span>
+          </button>
+          <button type="button" class="ws-slot" data-weapon="sniper" tabindex="-1">
+            <span class="ws-key">3</span>
+            <span class="ws-name">SNIPER</span>
+            <span class="ws-mag">5</span>
+          </button>
+        </div>
+        <div class="throwable-strip" id="throwable-strip">
+          <button type="button" class="th-slot ready" data-throw="grenade" tabindex="-1" title="Grenade">
+            <span class="th-key">4</span><span class="th-name">NADE</span>
+            <span class="th-cd"><i></i></span><span class="th-time">RDY</span>
+          </button>
+          <button type="button" class="th-slot ready" data-throw="smoke" tabindex="-1" title="Smoke">
+            <span class="th-key">5</span><span class="th-name">SMOKE</span>
+            <span class="th-cd"><i></i></span><span class="th-time">RDY</span>
+          </button>
+          <button type="button" class="th-slot ready" data-throw="flash" tabindex="-1" title="Flashbang">
+            <span class="th-key">6</span><span class="th-name">FLASH</span>
+            <span class="th-cd"><i></i></span><span class="th-time">RDY</span>
+          </button>
+          <button type="button" class="th-slot ready" data-throw="rpg" tabindex="-1" title="RPG">
+            <span class="th-key">7</span><span class="th-name">RPG</span>
+            <span class="th-cd"><i></i></span><span class="th-time">RDY</span>
+          </button>
+        </div>
+        <div class="weapon-meta">
+          <div class="weapon-name" id="weapon-name">RIFLE</div>
+          <div class="weapon-tag" id="weapon-tag">MID · BALANCED</div>
+        </div>
+        <div class="ammo" id="ammo">24<span>/24</span></div>
+        <div class="reload-hint hidden" id="reload-hint">RELOADING</div>
+        <div class="reload-bar hidden" id="reload-bar"><i></i></div>
+      </div>
+
+      <div id="money-pops"></div>
+    </div>
+
+    <div class="overlay pointer-prompt hidden" id="overlay-click">
+      <div class="overlay-box">
+        <h2>BOUNTY ARENA</h2>
+        <p><b>Click to lock mouse and play</b></p>
+        <p class="controls-grid">
+          <span>WASD</span><span>move</span>
+          <span>Mouse</span><span>look</span>
+          <span>Click</span><span>fire</span>
+          <span>RMB</span><span>toggle aim (ADS)</span>
+          <span>Shift</span><span>sprint (hold)</span>
+          <span>Ctrl / C</span><span>crouch / climb down</span>
+          <span>Space / W</span><span>jump / climb up</span>
+          <span>Ladder</span><span>walk into it to climb</span>
+          <span>1 / 2 / 3</span><span>rifle / SMG / sniper</span>
+          <span>4 / 5 / 6 / 7</span><span>arm nade / smoke / flash / RPG</span>
+          <span>Click</span><span>throw / fire when armed</span>
+          <span>Q</span><span>cancel throwable</span>
+          <span>G</span><span>arm grenade</span>
+          <span>Scroll / Q E</span><span>switch weapon</span>
+          <span>R</span><span>reload</span>
+          <span>T</span><span>chat</span>
+          <span>M</span><span>mute sound</span>
+          <span>V</span><span>mute mic (proximity voice)</span>
+          <span>Esc</span><span>release mouse</span>
+        </p>
+      </div>
+    </div>
+
+    <div class="overlay hidden" id="overlay-dead">
+      <div class="death-veil" id="death-veil"></div>
+      <div class="spectate-banner hidden" id="spectate-banner">
+        <span class="sp-label">KILLER'S VIEW</span>
+        <span class="sp-name" id="spectate-name">—</span>
+        <span class="sp-timer" id="spectate-timer">15s</span>
+      </div>
+      <div class="overlay-box death-card" id="death-card">
+        <h2>ELIMINATED</h2>
+        <p id="dead-info">by —</p>
+        <p class="money-loss">eliminated</p>
+        <p id="respawn-count">Respawning in 6…</p>
+      </div>
+    </div>
+
+    <div class="overlay hidden" id="overlay-broke">
+      <div class="overlay-box">
+        <h2>YOU'RE BUSTED</h2>
+        <p>Balance below the $3.00 stake. Deposit to respawn.</p>
+        <p class="balance-big" id="broke-balance">$0.00</p>
+        <div class="row center">
+          <button class="btn btn-primary" id="btn-broke-deposit">Deposit $10 (sandbox)</button>
+          <button class="btn" id="btn-broke-lobby">Back to lobby</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ DEPOSIT MODAL ============ -->
+  <div class="overlay hidden" id="modal-deposit">
+    <div class="overlay-box">
+      <h2 id="modal-title">Deposit</h2>
+      <div class="row center" id="preset-amounts">
+        <button class="btn" data-cents="500">$5</button>
+        <button class="btn" data-cents="1000">$10</button>
+        <button class="btn" data-cents="2000">$20</button>
+        <button class="btn" data-cents="5000">$50</button>
+      </div>
+      <div class="row center">
+        <input type="number" id="custom-amount" min="1" max="500" step="1" placeholder="Custom $" />
+        <button class="btn btn-primary" id="btn-modal-go">Go</button>
+      </div>
+      <p id="modal-error" class="error hidden"></p>
+      <button class="btn btn-ghost" id="btn-modal-close">Close</button>
+    </div>
+  </div>
+
+  <script src="/js/shared/voxel.js"></script>
+  <script src="/js/app.js"></script>
+  <script type="module" src="/js/game.js"></script>
+</body>
+</html>

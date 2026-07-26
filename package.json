@@ -1,0 +1,27 @@
+{
+  "name": "bounty-arena",
+  "version": "0.1.0",
+  "description": "Real-money PvP arena shooter. $3 per kill, -$3 per death. Server-authoritative. SANDBOX MONEY BY DEFAULT.",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "test": "node test/smoke.js",
+    "audit": "node test/audit.js",
+    "test:net": "node test/disconnect-test.js",
+    "test:chat": "node test/chat-test.js",
+    "test:predict": "node test/prediction-test.js",
+    "test:reconnect": "node test/reconnect-move-test.js",
+    "test:voice": "node test/voice-test.js",
+    "bot": "node test/bot-cli.js"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "dependencies": {
+    "three": "^0.185.1",
+    "ws": "^8.18.0"
+  },
+  "optionalDependencies": {
+    "stripe": "^17.0.0"
+  }
+}

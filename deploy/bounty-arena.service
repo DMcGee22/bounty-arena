@@ -1,0 +1,22 @@
+[Unit]
+Description=Bounty Arena game server
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/bounty-arena
+Environment=NODE_ENV=production
+Environment=PORT=3000
+Environment=DATA_DIR=/var/lib/bounty-arena
+# Set PUBLIC_URL to http://YOUR_EC2_IP:3000 (or https://your.domain) after launch
+# Environment=PUBLIC_URL=http://x.x.x.x:3000
+ExecStart=/usr/bin/node server/index.js
+Restart=always
+RestartSec=3
+# Realtime-ish: don't let the OS starve the 30Hz tick under load
+Nice=-5
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

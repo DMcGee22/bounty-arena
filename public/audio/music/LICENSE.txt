@@ -1,0 +1,18 @@
+Bounty Arena — music credits
+============================
+
+All tracks are Creative Commons Zero (CC0 1.0) public domain.
+No attribution is legally required; credit is still good form.
+
+Source: "T & T Free Cyberpunk Pack 2" on OpenGameArt
+  https://opengameart.org/content/t-t-free-cyberpunk-pack-2
+  License: CC0
+
+Active loop (single track — no multi-BPM crossfades):
+  combat_factory.ogg   ← new_factory_129bpm.ogg
+
+Also shipped as fallbacks if factory fails to load:
+  combat_aifight.ogg   ← ai_fight_120bpm.ogg
+  combat_overload.ogg  ← system_overload_154bpm.ogg
+
+SFX remain fully procedural (no sample bank).
