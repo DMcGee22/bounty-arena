@@ -5,6 +5,7 @@
   "main": "server/index.js",
   "scripts": {
     "start": "node server/index.js",
+    "deploy": "bash deploy/ship.sh",
     "test": "node test/smoke.js",
     "audit": "node test/audit.js",
     "test:net": "node test/disconnect-test.js",

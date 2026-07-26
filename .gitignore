@@ -21,3 +21,6 @@ build/
 .aws-sam/
 deploy/*.pem
 deploy/*-key.pem
+
+# local deploy host/key overrides
+deploy/local.env

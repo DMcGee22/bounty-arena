@@ -3,22 +3,52 @@
 Friends lagging on your laptop / ngrok is expected (~100–200ms+ tunnel RTT).  
 A small EC2 in a region near you (e.g. `us-east-1` / `us-west-2`) is the fix.
 
-## 1. GitHub (done via `gh` from your machine)
+## Easiest day-to-day flow
 
-Repo: **https://github.com/DMcGee22/bounty-arena**
-
-Push updates anytime:
+After the one-time SSH rule below, every update is:
 
 ```bash
 cd Desktop/Claude/bounty-arena
-git add -A && git commit -m "…" && git push
+git add -A && git commit -m "what changed"
+npm run deploy          # pushes GitHub + pulls on EC2 + restarts
 ```
 
-On the server after a push:
+That runs `deploy/ship.sh` → `git push` → SSH → `deploy/update.sh`.
+
+Optional config (if IP or key path change):
 
 ```bash
-cd /opt/bounty-arena && bash deploy/update.sh
+cp deploy/local.env.example deploy/local.env
+# edit EC2_HOST / EC2_KEY
 ```
+
+### One-time: allow SSH from your Mac
+
+Deploy needs **port 22**. The game only needs **3000** (already open).  
+If `npm run deploy` times out on SSH:
+
+1. **AWS Console → EC2 → your instance → Security tab → security group**
+2. **Edit inbound rules → Add rule**
+   | Type | Port | Source |
+   |------|------|--------|
+   | SSH  | 22   | **My IP** |
+3. Save, wait a few seconds, re-run `npm run deploy`
+
+Keep **SSH = My IP** only (not `0.0.0.0/0`). Game stays **3000 → anywhere**.
+
+Live game: **http://13.221.189.12:3000** (update if the public IP changes).
+
+### Manual fallback (same as ship.sh)
+
+```bash
+git push origin main
+ssh -i "$HOME/Downloads/Bounty Arena Key.pem" ubuntu@13.221.189.12 \
+  'cd /opt/bounty-arena && bash deploy/update.sh'
+```
+
+## 1. GitHub
+
+Repo: **https://github.com/DMcGee22/bounty-arena**
 
 ## 2. Launch EC2 (AWS Console — ~5 min)
 
