@@ -48,7 +48,7 @@ class Player {
     this.aiming = false;
     this.reloadingUntil = 0;
     this.lastFireAt = 0;
-    this.nextFireAt = 0; // fire-rate schedule (allows limited catch-up)
+    this.nextFireAt = 0; // next allowed fire time (ms, wall clock)
     // throwableId -> readyAt timestamp (ms)
     this.throwReadyAt = {};
     for (const id of (config.THROWABLE_KEYS || [])) this.throwReadyAt[id] = 0;
@@ -1041,15 +1041,13 @@ class Match {
     if (shooter.reloadingUntil) return;
     const def = shooter.weaponDef();
     const cd = (def.fireCooldown || 0.1) * 1000;
-    // Schedule-based fire rate so a backlog of inputs can catch up a few
-    // shots after a hitch, instead of collapsing to "one shot then silence".
-    if (!shooter.nextFireAt) shooter.nextFireAt = 0;
-    if (now < shooter.nextFireAt) return;
+    // Hard fire-rate gate from wall-clock now. No catch-up bursts — a single
+    // click / one tick with fire held must not dump 3–4 shots when nextFireAt
+    // is 0 or far in the past (that felt like multi-hit on one shot).
+    if (now < (shooter.nextFireAt || 0)) return;
     if (shooter.ammo() <= 0) { this.startReload(shooter, now); return; }
 
-    // Advance schedule; cap catch-up so a 2s freeze doesn't dump a whole mag at once
-    if (shooter.nextFireAt < now - cd * 4) shooter.nextFireAt = now - cd * 3;
-    shooter.nextFireAt = Math.max(shooter.nextFireAt, now - cd * 3) + cd;
+    shooter.nextFireAt = now + cd;
     shooter.lastFireAt = now;
     shooter.setAmmo(shooter.ammo() - 1);
     shooter.protectedUntil = 0; // firing drops spawn protection
