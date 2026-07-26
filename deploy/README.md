@@ -36,13 +36,13 @@ If `npm run deploy` times out on SSH:
 
 Keep **SSH = My IP** only (not `0.0.0.0/0`). Game stays **3000 → anywhere**.
 
-Live game: **http://13.221.189.12:3000** (update if the public IP changes).
+Live game: **http://54.224.28.249:3000** (update if the public IP changes).
 
 ### Manual fallback (same as ship.sh)
 
 ```bash
 git push origin main
-ssh -i "$HOME/Downloads/Bounty Arena Key.pem" ubuntu@13.221.189.12 \
+ssh -i "$HOME/Downloads/Bounty Arena Key.pem" ubuntu@54.224.28.249 \
   'cd /opt/bounty-arena && bash deploy/update.sh'
 ```
 

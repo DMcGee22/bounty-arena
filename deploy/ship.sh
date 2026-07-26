@@ -16,7 +16,7 @@ if [[ -f "$ROOT/deploy/local.env" ]]; then
   source "$ROOT/deploy/local.env"
 fi
 
-EC2_HOST="${EC2_HOST:-ubuntu@13.221.189.12}"
+EC2_HOST="${EC2_HOST:-ubuntu@54.224.28.249}"
 EC2_KEY="${EC2_KEY:-$HOME/Downloads/Bounty Arena Key.pem}"
 BRANCH="${BRANCH:-main}"
 APP_DIR="${APP_DIR:-/opt/bounty-arena}"
