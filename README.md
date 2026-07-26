@@ -26,6 +26,22 @@ npm start
 Open <http://localhost:3000>, create an account, deposit sandbox funds, and enter
 the arena.
 
+### Play with friends (low latency)
+
+**Do not use ngrok for real play** — tunnel RTT is what feels “laggy” on their end.
+
+1. Code lives at **https://github.com/DMcGee22/bounty-arena**
+2. Launch an Ubuntu EC2 (`t3.small`), open **TCP 3000** inbound
+3. On the instance:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/DMcGee22/bounty-arena/main/deploy/setup-ec2.sh | bash
+```
+
+4. Friends join `http://YOUR_EC2_PUBLIC_IP:3000`
+
+Full steps: [deploy/README.md](deploy/README.md).
+
 To see real multiplayer without a second human, run bots in other terminals:
 
 ```bash
