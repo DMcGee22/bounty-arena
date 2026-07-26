@@ -113,11 +113,18 @@ async function refreshArenaStatus() {
     const s = await api('/api/arena');
     const el = $('#arena-status');
     if (!el) return;
-    el.textContent = s.players === 0
-      ? 'Arena empty — deploy and set the pace.'
-      : `${s.players} operator${s.players === 1 ? '' : 's'} live across ${s.matches} sector${s.matches === 1 ? '' : 's'}.`;
+    // PvP stats only — bots never show up as “live operators” here
+    const pvp = s.players || 0;
+    const matches = s.matches || 0;
+    let line = pvp === 0
+      ? 'PvP arena empty — deploy and set the pace.'
+      : `${pvp} operator${pvp === 1 ? '' : 's'} live across ${matches} PvP sector${matches === 1 ? '' : 's'}.`;
+    if (s.botArena && (s.botArenaHumans || 0) > 0) {
+      line += ` · Bot test: ${s.botArenaHumans} human + ${s.bots || 30} AI`;
+    }
+    el.textContent = line;
     const node = $('#home-node-label');
-    if (node) node.textContent = `POC / LOCAL / ${s.players || 0} LIVE`;
+    if (node) node.textContent = `POC / ${pvp} PVP LIVE`;
   } catch {}
 }
 

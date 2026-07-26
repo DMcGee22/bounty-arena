@@ -1,20 +1,16 @@
 'use strict';
 
-// Skill-based matchmaking + dynamic match scaling + persistent bot arena.
+// Skill-based matchmaking + dynamic match scaling + isolated bot arena.
 //
-// Matches are lightweight instances (see match.js), all ticked by one 30Hz
-// loop. A joining player is placed into the open match whose average Elo is
-// closest to theirs (within ELO_BAND); if none fits — or everything is full —
-// a fresh match is spun up. Empty matches are destroyed after a short idle,
-// so the number of concurrent matches breathes with demand.
-//
-// Bot arena (`?mode=bots`) is a separate always-on match with 30 server AIs.
+// Bot arena (`?mode=bots`) is a SEPARATE match with 30 server AIs.
+// It never receives normal JOIN MATCH traffic and is excluded from PvP stats.
 
 const config = require('./config');
 const elo = require('./elo');
 const { Match } = require('./match');
 
 const EMPTY_MATCH_TTL_MS = 30 * 1000;
+const BOT_ARENA_IDLE_MS = 45 * 1000; // tear down bots when no humans for a bit
 
 class Matchmaker {
   constructor() {
@@ -28,23 +24,24 @@ class Matchmaker {
     const now = Date.now();
     this.matches = this.matches.filter((m) => {
       if (m.botArena) {
-        // Keep bot arena while any human is connected; recycle after idle
-        if (m.humanCount() > 0) return true;
-        if (now - (m.emptySince || now) > EMPTY_MATCH_TTL_MS * 4) {
+        // Only keep bot arena while a human is in it (or briefly after leave)
+        if (m.humanCount() > 0) {
+          m.emptySince = 0;
+          return true;
+        }
+        if (!m.emptySince) m.emptySince = now;
+        if (now - m.emptySince > BOT_ARENA_IDLE_MS) {
           m.close();
           if (this.botMatch === m) this.botMatch = null;
+          console.log(`[matchmaker] bot arena #${m.dbId} recycled (no humans)`);
           return false;
         }
         return true;
       }
-      if (m.players.size === 0 && now - m.emptySince > EMPTY_MATCH_TTL_MS) {
-        m.close();
-        return false;
-      }
-      // Also GC normal matches with no humans (shouldn't happen without bots)
-      if (m.humanCount() === 0 && m.players.size > 0 && now - m.emptySince > EMPTY_MATCH_TTL_MS) {
-        // only bots left in a non-bot match — close
-        if (![...m.players.values()].some((p) => !p.isBot)) {
+      // Normal PvP: destroy when no humans left
+      if (m.humanCount() === 0) {
+        if (!m.emptySince) m.emptySince = now;
+        if (now - m.emptySince > EMPTY_MATCH_TTL_MS) {
           m.close();
           return false;
         }
@@ -68,34 +65,55 @@ class Matchmaker {
     return m;
   }
 
-  // SBMM placement. Returns the Player or null (couldn't afford stake).
-  // opts.botArena → join / create the 30-bot test match.
-  join(user, socket, opts = {}) {
-    // Reconnect path: if this user already has a live avatar anywhere, rebind.
-    const current = this.findMatchOf(user.id);
-    if (current) return current.addPlayer(user, socket, elo.get(user.id));
+  /** Drop a user out of whatever match they're in (mode switch / leave). */
+  eject(userId, reason = 'left') {
+    const m = this.findMatchOf(userId);
+    if (!m) return;
+    const p = m.players.get(userId);
+    if (p && !p.isBot) m.removePlayer(p, reason);
+  }
 
-    if (opts.botArena) {
+  // opts.botArena → join / create the 30-bot test match only.
+  join(user, socket, opts = {}) {
+    const wantBots = !!opts.botArena;
+    const current = this.findMatchOf(user.id);
+
+    // Already in a match: rebind only if mode matches; otherwise leave first
+    if (current) {
+      const curBots = !!current.botArena;
+      if (curBots === wantBots) {
+        return current.addPlayer(user, socket, elo.get(user.id));
+      }
+      // Switching PvP ↔ bot arena
+      const p = current.players.get(user.id);
+      if (p) current.removePlayer(p, wantBots ? 'entered bot arena' : 'entered PvP');
+    }
+
+    if (wantBots) {
       const arena = this.ensureBotArena();
       return arena.addPlayer(user, socket, elo.get(user.id));
     }
 
+    // ---- Normal PvP only (never bot arena) ----
     const rating = elo.get(user.id);
     let best = null;
     let bestDiff = Infinity;
     for (const m of this.matches) {
-      if (m.botArena) continue; // never dump ranked players into bot meat grinder
-      if (m.playerCount() >= config.MAX_MATCH_PLAYERS) continue;
+      if (m.botArena) continue;
+      const humans = m.humanCount();
+      if (humans >= config.MAX_MATCH_PLAYERS) continue;
       const avg = m.avgElo();
       const diff = avg === null ? config.ELO_BAND - 1 : Math.abs(avg - rating);
-      // prefer populated matches so games actually happen
-      const score = diff - (m.playerCount() > 0 ? 100 : 0);
-      if (diff <= config.ELO_BAND && score < bestDiff) { best = m; bestDiff = score; }
+      const score = diff - (humans > 0 ? 100 : 0);
+      if (diff <= config.ELO_BAND && score < bestDiff) {
+        best = m;
+        bestDiff = score;
+      }
     }
     if (!best) {
-      best = new Match();
+      best = new Match({ botArena: false });
       this.matches.push(best);
-      console.log(`[matchmaker] spun up match #${best.dbId} (now ${this.matches.length} live)`);
+      console.log(`[matchmaker] spun up PvP match #${best.dbId} (now ${this.matches.length} live)`);
     }
     return best.addPlayer(user, socket, rating);
   }
@@ -115,19 +133,30 @@ class Matchmaker {
   }
 
   stats() {
-    let players = 0;
+    let pvpPlayers = 0;
+    let pvpMatches = 0;
+    let botHumans = 0;
     let bots = 0;
     for (const m of this.matches) {
-      for (const p of m.players.values()) {
-        if (p.isBot) bots++;
-        else if (!p.disconnectedAt) players++;
+      if (m.botArena) {
+        botHumans += m.humanCount();
+        bots += m.botAIs ? m.botAIs.size : 0;
+        continue;
+      }
+      const h = m.humanCount();
+      if (h > 0) {
+        pvpMatches++;
+        pvpPlayers += h;
       }
     }
     return {
-      matches: this.matches.filter((m) => m.humanCount() > 0 || m.botArena).length,
-      players,
+      // PvP-only for the normal lobby readout
+      matches: pvpMatches,
+      players: pvpPlayers,
+      // Bot test is separate
       bots,
-      botArena: !!(this.botMatch && !this.botMatch.closed),
+      botArena: !!(this.botMatch && !this.botMatch.closed && this.matches.includes(this.botMatch)),
+      botArenaHumans: botHumans,
     };
   }
 }

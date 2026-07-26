@@ -457,17 +457,20 @@ class Match {
     }
   }
 
+  /** Connected humans only (bots never count for PvP capacity / SBMM). */
   playerCount() {
-    let n = 0;
-    for (const p of this.players.values()) if (!p.disconnectedAt) n++;
-    return n;
+    return this.humanCount();
   }
 
   avgElo() {
-    if (this.players.size === 0) return null;
     let sum = 0;
-    for (const p of this.players.values()) sum += p.elo;
-    return sum / this.players.size;
+    let n = 0;
+    for (const p of this.players.values()) {
+      if (p.isBot || p.disconnectedAt) continue;
+      sum += p.elo;
+      n++;
+    }
+    return n === 0 ? null : sum / n;
   }
 
   close() {
