@@ -9,15 +9,17 @@
 import * as THREE from '/vendor/three.module.js';
 import Audio from '/js/audio.js';
 import Voice from '/js/voice.js';
+import { BiomeLife } from '/js/biome-life.js';
 
 const V = window.BountyVoxel;
+let biomeLife = null;
 
 // ---------------------------------------------------------------- atlas ----
 
-// Procedural atlas — "Neon Brutalist" style: smooth concrete, steel, cyan
-// accent lines. Higher-res tiles + linear filtering = not Minecraft pixel dirt.
+// Procedural atlas — higher-res PBR-ish tiles (grass, rock, metal, neon).
+// Linear filtering + mipmaps so surfaces read modern, not Minecraft-pixel.
 function buildAtlas() {
-  const TILE = 32, COLS = 4, SIZE = TILE * COLS;
+  const TILE = 64, COLS = 4, SIZE = TILE * COLS;
   const cv = document.createElement('canvas');
   cv.width = cv.height = SIZE;
   const g = cv.getContext('2d');
@@ -28,6 +30,14 @@ function buildAtlas() {
     h = Math.imul(h, 1274126177) >>> 0;
     return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
   };
+  const fbm = (x, y, s) => {
+    let v = 0, a = 0.5, f = 1, n = 0;
+    for (let i = 0; i < 4; i++) {
+      v += rnd(Math.floor(x * f), Math.floor(y * f), s + i * 17) * a;
+      n += a; a *= 0.5; f *= 2;
+    }
+    return v / n;
+  };
 
   const rgb = (r, gg, b, a = 1) => {
     const c = (v) => Math.max(0, Math.min(255, Math.round(v)));
@@ -36,120 +46,152 @@ function buildAtlas() {
 
   const tile = (idx, fn) => {
     const tx = (idx % COLS) * TILE, ty = Math.floor(idx / COLS) * TILE;
+    const img = g.createImageData(TILE, TILE);
     for (let y = 0; y < TILE; y++) {
       for (let x = 0; x < TILE; x++) {
-        g.fillStyle = fn(x, y);
-        g.fillRect(tx + x, ty + y, 1, 1);
+        const c = fn(x, y);
+        // c is [r,g,b] or css — support both
+        let r, gg, b;
+        if (Array.isArray(c)) { r = c[0]; gg = c[1]; b = c[2]; }
+        else {
+          // fallback parse not needed; always arrays below
+          r = gg = b = 0;
+        }
+        const i = (y * TILE + x) * 4;
+        img.data[i] = r; img.data[i + 1] = gg; img.data[i + 2] = b; img.data[i + 3] = 255;
       }
     }
+    g.putImageData(img, tx, ty);
   };
 
-  // Soft micro-variation (not pixel-noise dirt)
-  const soft = (base, x, y, s, amt = 0.06) => {
-    const n = (rnd(x >> 1, y >> 1, s) - 0.5) * amt;
-    return rgb(base[0] * (1 + n), base[1] * (1 + n), base[2] * (1 + n));
+  const soft = (base, x, y, s, amt = 0.08) => {
+    const n = (fbm(x * 0.35, y * 0.35, s) - 0.5) * amt * 2;
+    const m = (rnd(x, y, s + 3) - 0.5) * amt * 0.5;
+    return [
+      Math.max(0, Math.min(255, base[0] * (1 + n + m))),
+      Math.max(0, Math.min(255, base[1] * (1 + n + m))),
+      Math.max(0, Math.min(255, base[2] * (1 + n + m))),
+    ];
   };
 
-  // 0 ground top — dark arena floor with faint cyan grid
+  // 0 grass top — organic green with mottling
   tile(0, (x, y) => {
-    const grid = x === 0 || y === 0 || x === 31 || y === 31;
-    const mid = x === 15 || y === 15;
-    if (grid) return rgb(0, 200, 220, 1);
-    if (mid && (x + y) % 2 === 0) return rgb(35, 48, 62);
-    return soft([28, 34, 44], x, y, 1, 0.08);
+    const n = fbm(x * 0.4, y * 0.4, 1);
+    const blade = rnd(x, y, 2) > 0.82;
+    if (blade) return soft([40, 110, 48], x, y, 3, 0.15);
+    return soft([34 + n * 40, 90 + n * 50, 36 + n * 20], x, y, 1, 0.12);
   });
-  // 1 ground side / curb
+  // 1 grass side (dirt under green lip)
   tile(1, (x, y) => {
-    const lip = y < 4;
-    if (lip) return soft([0, 160, 180], x, y, 2, 0.1);
-    return soft([22, 26, 34], x, y, 3, 0.07);
+    if (y < 10) return soft([48, 120, 52], x, y, 4, 0.1);
+    if (y < 14) return soft([90, 70, 42], x, y, 5, 0.08);
+    return soft([72, 52, 32], x, y, 6, 0.1);
   });
-  // 2 substrate (under surface)
-  tile(2, (x, y) => soft([18, 20, 26], x, y, 4, 0.1));
-  // 3 polished concrete
+  // 2 dirt / soil
+  tile(2, (x, y) => {
+    const n = fbm(x * 0.5, y * 0.5, 7);
+    const pebble = rnd(x, y, 8) > 0.93;
+    if (pebble) return soft([110, 95, 70], x, y, 9, 0.1);
+    return soft([78 + n * 25, 56 + n * 18, 36 + n * 12], x, y, 7, 0.1);
+  });
+  // 3 stone / rock
   tile(3, (x, y) => {
-    const edge = x < 1 || y < 1 || x > 30 || y > 30;
-    if (edge) return rgb(55, 62, 78);
-    return soft([72, 80, 98], x, y, 5, 0.05);
+    const n = fbm(x * 0.3, y * 0.3, 10);
+    const crack = Math.abs(Math.sin(x * 0.4 + n * 4) * Math.cos(y * 0.35)) > 0.92;
+    if (crack) return soft([45, 48, 55], x, y, 11, 0.05);
+    return soft([95 + n * 35, 100 + n * 32, 110 + n * 30], x, y, 10, 0.08);
   });
-  // 4 panel / lane (jointed concrete with cyan inlay)
+  // 4 cobble / pavement
   tile(4, (x, y) => {
-    const joint = x % 16 === 0 || y % 16 === 0;
-    const inlay = (x > 14 && x < 17) || (y > 14 && y < 17);
-    if (inlay) return rgb(0, 220, 255);
-    if (joint) return rgb(40, 46, 58);
-    return soft([58, 66, 82], x, y, 7, 0.04);
+    const cellX = Math.floor(x / 16), cellY = Math.floor(y / 16);
+    const mortar = (x % 16 < 1) || (y % 16 < 1);
+    if (mortar) return soft([50, 52, 58], x, y, 12, 0.04);
+    const n = fbm(x * 0.4 + cellX * 3, y * 0.4 + cellY * 3, 13);
+    return soft([110 + n * 30, 112 + n * 28, 120 + n * 25], x, y, 13, 0.06);
   });
-  // 5 composite panel (dark platform surface)
+  // 5 planks / wood deck
   tile(5, (x, y) => {
-    const groove = y % 8 === 0;
-    if (groove) return rgb(12, 14, 20);
-    return soft([38, 42, 54], x, y, 8, 0.05);
+    const board = Math.floor(y / 11);
+    const seam = y % 11 === 0;
+    const grain = Math.sin(x * 0.7 + board) * 8 + fbm(x * 0.2, y * 0.5, 14) * 20;
+    if (seam) return soft([40, 28, 16], x, y, 15, 0.05);
+    return soft([120 + grain, 82 + grain * 0.6, 42 + grain * 0.3], x, y, 16, 0.07);
   });
-  // 6 strut / column side (vertical metal)
+  // 6 log side (bark rings)
   tile(6, (x, y) => {
-    const seam = x === 8 || x === 23;
-    const bolt = (y % 6 === 2) && (x === 4 || x === 27);
-    if (bolt) return rgb(0, 240, 255);
-    if (seam) return rgb(20, 24, 32);
-    return soft([48, 54, 68], x, y, 10, 0.06);
+    const ring = Math.sin(x * 0.35) * 10 + fbm(x * 0.2, y * 0.15, 17) * 25;
+    const vertical = rnd(Math.floor(x / 3), y, 18) > 0.88;
+    if (vertical) return soft([40, 28, 18], x, y, 19, 0.08);
+    return soft([90 + ring, 62 + ring * 0.5, 36], x, y, 17, 0.1);
   });
-  // 7 strut top
-  tile(7, (x, y) => soft([90, 100, 120], x, y, 11, 0.05));
-  // 8 scrub / energy bush (stylized — not leaves)
-  tile(8, (x, y) => {
-    const n = rnd(x, y, 12);
-    if (n > 0.72) return rgb(255, 40, 160);
-    if (n > 0.55) return rgb(0, 200, 220);
-    return soft([24, 40, 52], x, y, 12, 0.12);
-  });
-  // 9 pale grit (sand-trap → light concrete)
-  tile(9, (x, y) => soft([140, 148, 162], x, y, 13, 0.06));
-  // 10 cladding (brutalist facade — clean bands, not brick mortar)
-  tile(10, (x, y) => {
-    const band = Math.floor(y / 6) % 2 === 0;
-    const joint = y % 6 === 0;
-    if (joint) return rgb(30, 34, 44);
-    return soft(band ? [70, 76, 92] : [58, 64, 78], x, y, 14, 0.04);
-  });
-  // 11 steel plate + cyan trim
-  tile(11, (x, y) => {
-    const trim = x < 2 || y < 2 || x > 29 || y > 29;
-    const sheen = x + y * 0.3;
-    if (trim) return rgb(0, 230, 255);
-    const v = 110 + Math.sin(sheen * 0.4) * 18 + (rnd(x, y, 15) - 0.5) * 12;
-    return rgb(v, v + 4, v + 12);
-  });
-  // 12 industrial ladder (cyan rails)
-  tile(12, (x, y) => {
-    const rail = x <= 3 || x >= 28;
-    const rung = y % 5 <= 1;
-    if (rail) return rgb(0, 200, 230);
-    if (rung) return rgb(90, 100, 120);
-    return rgb(12, 16, 24);
-  });
-  // 13 accent hazard (optional spare)
-  tile(13, (x, y) => {
-    const stripe = ((x + y) % 10) < 5;
-    return stripe ? rgb(255, 180, 40) : rgb(22, 24, 30);
-  });
-  // 14 deep void panel
-  tile(14, (x, y) => soft([14, 16, 22], x, y, 18, 0.04));
-  // 15 emissive pad
-  tile(15, (x, y) => {
-    const cx = x - 15.5, cy = y - 15.5;
+  // 7 log top (rings)
+  tile(7, (x, y) => {
+    const cx = x - 31.5, cy = y - 31.5;
     const d = Math.sqrt(cx * cx + cy * cy);
-    if (d < 6) return rgb(0, 255, 200);
-    if (d < 10) return rgb(0, 120, 140);
-    return rgb(20, 28, 36);
+    const ring = Math.sin(d * 0.9) * 0.5 + 0.5;
+    return soft([140 - ring * 40, 100 - ring * 30, 60 - ring * 20], x, y, 20, 0.08);
+  });
+  // 8 leaves
+  tile(8, (x, y) => {
+    const n = fbm(x * 0.45, y * 0.45, 21);
+    const hole = rnd(x, y, 22) > 0.9;
+    if (hole) return soft([18, 40, 20], x, y, 23, 0.1);
+    return soft([30 + n * 50, 90 + n * 70, 32 + n * 30], x, y, 21, 0.14);
+  });
+  // 9 sand
+  tile(9, (x, y) => {
+    const n = fbm(x * 0.25, y * 0.25, 24);
+    const spark = rnd(x, y, 25) > 0.96;
+    if (spark) return [230, 210, 160];
+    return soft([194 + n * 30, 170 + n * 25, 110 + n * 20], x, y, 24, 0.08);
+  });
+  // 10 brick
+  tile(10, (x, y) => {
+    const row = Math.floor(y / 10);
+    const off = (row % 2) * 16;
+    const mortar = (y % 10 < 1) || ((x + off) % 32 < 1);
+    if (mortar) return soft([55, 50, 48], x, y, 26, 0.04);
+    const n = fbm(x * 0.3, y * 0.3, 27 + row);
+    return soft([150 + n * 40, 70 + n * 20, 55 + n * 15], x, y, 28, 0.08);
+  });
+  // 11 iron / metal plate
+  tile(11, (x, y) => {
+    const rivet = ((x % 16 === 4) || (x % 16 === 12)) && ((y % 16 === 4) || (y % 16 === 12));
+    const panel = (x % 32 < 1) || (y % 32 < 1);
+    const sheen = 120 + Math.sin(x * 0.2 + y * 0.15) * 25 + fbm(x * 0.2, y * 0.2, 29) * 30;
+    if (rivet) return [220, 230, 240];
+    if (panel) return soft([40, 48, 58], x, y, 30, 0.05);
+    return soft([sheen, sheen + 4, sheen + 12], x, y, 31, 0.05);
+  });
+  // 12 ladder
+  tile(12, (x, y) => {
+    const rail = x <= 8 || x >= 55;
+    const rung = y % 10 <= 2;
+    if (rail) return soft([20, 180, 210], x, y, 32, 0.08);
+    if (rung) return soft([100, 110, 125], x, y, 33, 0.06);
+    return soft([14, 18, 26], x, y, 34, 0.04);
+  });
+  // 13 hazard
+  tile(13, (x, y) => {
+    const stripe = ((x + y) % 18) < 9;
+    return stripe ? soft([255, 190, 40], x, y, 35, 0.06) : soft([28, 30, 36], x, y, 36, 0.05);
+  });
+  // 14 deep panel
+  tile(14, (x, y) => soft([18, 20, 28], x, y, 37, 0.06));
+  // 15 emissive pad / neon
+  tile(15, (x, y) => {
+    const cx = x - 31.5, cy = y - 31.5;
+    const d = Math.sqrt(cx * cx + cy * cy);
+    if (d < 12) return [0, 255, 210];
+    if (d < 22) return soft([0, 140, 160], x, y, 38, 0.1);
+    return soft([24, 32, 44], x, y, 39, 0.06);
   });
 
   const tex = new THREE.CanvasTexture(cv);
-  // Linear filtering = soft modern surfaces, not chunky pixels
   tex.magFilter = THREE.LinearFilter;
   tex.minFilter = THREE.LinearMipmapLinearFilter;
   tex.generateMipmaps = true;
-  tex.anisotropy = 4;
+  tex.anisotropy = 8;
   tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
 }
@@ -191,19 +233,24 @@ function vertexAO(s1, s2, c) {
 /** Solid chunk mesh — face normals for real sun/moon shading + soft AO colors. */
 function meshChunkGeometry(world, cx, cz, chunkSize, atlasCols) {
   const pos = [], uv = [], col = [], nrm = [], idx = [];
-  const inset = 0.5 / (atlasCols * 32);
+  const inset = 0.5 / (atlasCols * 64);
   const tileSpan = 1 / atlasCols;
   let vcount = 0;
   const x0 = cx * chunkSize, z0 = cz * chunkSize;
   const x1 = x0 + chunkSize, z1 = z0 + chunkSize;
   const h = world.h;
   const tt = themeTint();
+  const smoothTerrain = !!(world.theme && world.theme.smooth);
 
   for (let x = x0; x < x1; x++) {
     for (let z = z0; z < z1; z++) {
+      // Generated ground height — terrain body is drawn as heightfield when smooth
+      const genH = smoothTerrain ? world.columnHeight(x, z) : -1;
       for (let y = 0; y < h; y++) {
         const block = world.get(x, y, z);
         if (block === V.AIR) continue;
+        // Skip pure terrain column fill in smooth biomes (heightfield covers it)
+        if (smoothTerrain && y <= genH) continue;
         const def = V.BLOCKS[block];
         if (!def) continue;
         for (const f of FACES) {
@@ -257,6 +304,11 @@ function meshChunkGeometry(world, cx, cz, chunkSize, atlasCols) {
       }
     }
   }
+  // Smooth heightfield terrain for experimental wilds (and any theme.smooth)
+  if (smoothTerrain) {
+    meshSmoothHeightfield(world, cx, cz, chunkSize, atlasCols, pos, uv, col, nrm, idx, () => vcount, (n) => { vcount = n; }, tt);
+  }
+
   if (vcount === 0) return null;
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
@@ -268,10 +320,102 @@ function meshChunkGeometry(world, cx, cz, chunkSize, atlasCols) {
   return geo;
 }
 
+/** Continuous ground mesh — corners sample live solid tops so digs become craters. */
+function meshSmoothHeightfield(world, cx, cz, chunkSize, atlasCols, pos, uv, col, nrm, idx, getV, setV, tt) {
+  const tileSpan = 1 / atlasCols;
+  const inset = 0.5 / (atlasCols * 64);
+  // Grass top tile
+  const tileIdx = 0;
+  const tu = (tileIdx % atlasCols) * tileSpan;
+  const tv = 1 - (Math.floor(tileIdx / atlasCols) + 1) * tileSpan;
+  const x0 = cx * chunkSize, z0 = cz * chunkSize;
+
+  // Live surface: walk down from generated height so explosions carve the mesh
+  const surf = (x, z) => {
+    const gen = world.columnHeight(x, z);
+    for (let y = gen; y >= 0; y--) {
+      if (world.isSolid(x, y, z)) return y + 1;
+    }
+    // Empty column — still show a low plane
+    return Math.max(1, world.heightField ? world.heightField(x, z) : gen);
+  };
+  // Corner height = average of up to 4 neighboring cell surfaces (smooth slopes)
+  const cornerH = (x, z) => {
+    const samples = [
+      surf(x - 1, z - 1), surf(x, z - 1),
+      surf(x - 1, z), surf(x, z),
+    ];
+    // Prefer continuous field when no digs (gen matches solid)
+    if (world.heightField) {
+      const hf = world.heightField(x, z);
+      const avg = (samples[0] + samples[1] + samples[2] + samples[3]) * 0.25;
+      // Blend: heightfield for natural roll, solid surface for crater fidelity
+      const dug = Math.abs(avg - (hf + 1)) > 0.85;
+      return dug ? avg : (hf + 1);
+    }
+    return (samples[0] + samples[1] + samples[2] + samples[3]) * 0.25;
+  };
+
+  let vcount = getV();
+  for (let lz = 0; lz < chunkSize; lz++) {
+    for (let lx = 0; lx < chunkSize; lx++) {
+      const x = x0 + lx, z = z0 + lz;
+      const h00 = cornerH(x, z);
+      const h10 = cornerH(x + 1, z);
+      const h01 = cornerH(x, z + 1);
+      const h11 = cornerH(x + 1, z + 1);
+      // Two triangles; compute normals from edges
+      const verts = [
+        [x, h00, z],
+        [x + 1, h10, z],
+        [x + 1, h11, z + 1],
+        [x, h01, z + 1],
+      ];
+      const pushTri = (a, b, c) => {
+        const ax = verts[a][0], ay = verts[a][1], az = verts[a][2];
+        const bx = verts[b][0], by = verts[b][1], bz = verts[b][2];
+        const cx_ = verts[c][0], cy = verts[c][1], cz_ = verts[c][2];
+        let nx = (by - ay) * (cz_ - az) - (bz - az) * (cy - ay);
+        let ny = (bz - az) * (cx_ - ax) - (bx - ax) * (cz_ - az);
+        let nz = (bx - ax) * (cy - ay) - (by - ay) * (cx_ - ax);
+        const nl = Math.hypot(nx, ny, nz) || 1;
+        nx /= nl; ny /= nl; nz /= nl;
+        // Face upward-ish lighting
+        const light = 0.55 + 0.45 * Math.max(0, ny);
+        const base = vcount;
+        for (const vi of [a, b, c]) {
+          const [px, py, pz] = verts[vi];
+          pos.push(px, py, pz);
+          nrm.push(nx, ny, nz);
+          const u = vi === 0 || vi === 3 ? 0 : 1;
+          const v = vi === 0 || vi === 1 ? 0 : 1;
+          uv.push(tu + (u ? tileSpan - inset : inset), tv + (v ? tileSpan - inset : inset));
+          // Earthy green tint with slope darkening
+          const slope = 1 - Math.min(0.35, Math.abs(1 - ny) * 0.5);
+          col.push(
+            light * 0.72 * tt[0] * slope,
+            light * 0.95 * tt[1] * slope,
+            light * 0.55 * tt[2] * slope
+          );
+        }
+        idx.push(base, base + 1, base + 2);
+        vcount += 3;
+      };
+      // Flip diagonal for smoother silhouette on ridges
+      if (Math.abs(h00 - h11) < Math.abs(h10 - h01)) {
+        pushTri(0, 1, 2); pushTri(0, 2, 3);
+      } else {
+        pushTri(0, 1, 3); pushTri(1, 2, 3);
+      }
+    }
+  }
+  setV(vcount);
+}
+
 function buildChunk(world, cx, cz, chunkSize, atlasCols) {
   const pos = [], uv = [], col = [], idx = [];
-  // inset matches 32px tiles (atlas tile size used in buildAtlas)
-  const inset = 0.5 / (atlasCols * 32);
+  // inset matches atlas tile size used in buildAtlas
+  const inset = 0.5 / (atlasCols * 64);
   const tileSpan = 1 / atlasCols;
   let vcount = 0;
 
@@ -648,13 +792,33 @@ function initThree() {
     vertexColors: true,
     side: THREE.FrontSide,
     fog: false,
-    roughness: 0.88,
-    metalness: 0.06,
-    envMapIntensity: 0.35,
+    roughness: 0.82,
+    metalness: 0.12,
+    envMapIntensity: 0.45,
   });
+  // Subtle living emissive shimmer on cool/cyan vertex colors (neon biomes)
+  worldMat.onBeforeCompile = (shader) => {
+    shader.uniforms.uTime = { value: 0 };
+    shader.uniforms.uLife = { value: 0 };
+    worldMat.userData.shader = shader;
+    shader.fragmentShader = 'uniform float uTime;\nuniform float uLife;\n' + shader.fragmentShader;
+    shader.fragmentShader = shader.fragmentShader.replace(
+      '#include <emissivemap_fragment>',
+      `#include <emissivemap_fragment>
+       #ifdef USE_COLOR
+       float cool = clamp(vColor.b - vColor.r * 0.65, 0.0, 1.0);
+       float pulse = 0.55 + 0.45 * sin(uTime * 2.2 + vColor.g * 6.0);
+       totalEmissiveRadiance += vec3(vColor) * cool * pulse * uLife * 0.55;
+       #endif`
+    );
+  };
+  worldMat.customProgramCacheKey = () => 'worldMatLife_v2';
 
   worldGroup = new THREE.Group();
   scene.add(worldGroup);
+
+  biomeLife = new BiomeLife(scene);
+  biomeLife.setQuality(settings.quality);
 
   buildViewModel();
   buildMuzzleFlash();
@@ -697,25 +861,40 @@ function applyGraphicsSettings() {
 function applyThemeAtmosphere(theme) {
   const id = theme?.id || 'neon';
   const palettes = {
-    neon:     { sky: 0x050818, fog: 0x0a0e28, horizon: 0x1a1050, top: 0x02040c, bottom: 0x2a0848, band: [0.9, 0.15, 1.0] },
-    forest:   { sky: 0x020c06, fog: 0x06180c, horizon: 0x0a2814, top: 0x010804, bottom: 0x0c2010, band: [0.05, 0.9, 0.2] },
-    desert:   { sky: 0x2a1808, fog: 0x3a2410, horizon: 0x5a3818, top: 0x180c04, bottom: 0x4a2a10, band: [1.0, 0.45, 0.1] },
-    snow:     { sky: 0x0c1828, fog: 0x183048, horizon: 0x3a6088, top: 0x040810, bottom: 0x203850, band: [0.5, 0.75, 1.0] },
-    volcanic: { sky: 0x1a0404, fog: 0x2a0808, horizon: 0x5a1010, top: 0x0c0202, bottom: 0x3a0c08, band: [1.0, 0.15, 0.05] },
-    coast:    { sky: 0x041828, fog: 0x082838, horizon: 0x104868, top: 0x020c18, bottom: 0x0c3040, band: [0.1, 0.55, 0.95] },
-    farm:     { sky: 0x14100c, fog: 0x201810, horizon: 0x302818, top: 0x0a0806, bottom: 0x241c10, band: [0.55, 0.4, 0.15] },
-    canyon:   { sky: 0x201008, fog: 0x3a1c0c, horizon: 0x5a2c14, top: 0x100804, bottom: 0x3a180c, band: [0.95, 0.35, 0.1] },
-    storm:    { sky: 0x060814, fog: 0x0c1020, horizon: 0x1a2440, top: 0x02040a, bottom: 0x101828, band: [0.4, 0.5, 1.0] },
-    void:     { sky: 0x040208, fog: 0x0a0614, horizon: 0x140828, top: 0x020106, bottom: 0x10041a, band: [0.7, 0.2, 0.95] },
+    neon:     { sky: 0x050818, fog: 0x0a0e28, horizon: 0x1a1050, top: 0x02040c, bottom: 0x2a0848, band: [0.9, 0.15, 1.0], life: 1.0 },
+    forest:   { sky: 0x020c06, fog: 0x06180c, horizon: 0x0a2814, top: 0x010804, bottom: 0x0c2010, band: [0.05, 0.9, 0.2], life: 0.15 },
+    desert:   { sky: 0x2a1808, fog: 0x3a2410, horizon: 0x5a3818, top: 0x180c04, bottom: 0x4a2a10, band: [1.0, 0.45, 0.1], life: 0.1 },
+    snow:     { sky: 0x0c1828, fog: 0x183048, horizon: 0x3a6088, top: 0x040810, bottom: 0x203850, band: [0.5, 0.75, 1.0], life: 0.2 },
+    volcanic: { sky: 0x1a0404, fog: 0x2a0808, horizon: 0x5a1010, top: 0x0c0202, bottom: 0x3a0c08, band: [1.0, 0.15, 0.05], life: 0.55 },
+    coast:    { sky: 0x041828, fog: 0x082838, horizon: 0x104868, top: 0x020c18, bottom: 0x0c3040, band: [0.1, 0.55, 0.95], life: 0.2 },
+    farm:     { sky: 0x14100c, fog: 0x201810, horizon: 0x302818, top: 0x0a0806, bottom: 0x241c10, band: [0.55, 0.4, 0.15], life: 0.12 },
+    canyon:   { sky: 0x201008, fog: 0x3a1c0c, horizon: 0x5a2c14, top: 0x100804, bottom: 0x3a180c, band: [0.95, 0.35, 0.1], life: 0.12 },
+    storm:    { sky: 0x060814, fog: 0x0c1020, horizon: 0x1a2440, top: 0x02040a, bottom: 0x101828, band: [0.4, 0.5, 1.0], life: 0.65 },
+    void:     { sky: 0x040208, fog: 0x0a0614, horizon: 0x140828, top: 0x020106, bottom: 0x10041a, band: [0.7, 0.2, 0.95], life: 0.9 },
+    wilds:    { sky: 0x0a1820, fog: 0x143040, horizon: 0x4a7a90, top: 0x6eb0e0, bottom: 0x1a3040, band: [0.35, 0.65, 0.85], life: 0.2 },
   };
   const p = palettes[id] || palettes.neon;
   themeSkyBase = {
     top: p.top, mid: p.horizon, bottom: p.bottom, fog: p.fog, sky: p.sky,
-    band: p.band,
+    band: p.band, life: p.life ?? 0.2,
   };
   ARENA_SKY = p.sky;
   ARENA_FOG = p.fog;
   ARENA_HORIZON = p.horizon;
+  currentTheme = theme || currentTheme;
+  if (biomeLife) {
+    biomeLife.setQuality(settings.quality);
+    biomeLife.setTheme(id);
+  }
+  if (worldMat?.userData?.shader) {
+    worldMat.userData.shader.uniforms.uLife.value = p.life ?? 0.2;
+  }
+  // Wilds / outdoor biomes get slightly brighter daylight fill
+  if (hemiLight) {
+    if (id === 'wilds') hemiLight.intensity = 0.72;
+    else if (id === 'forest') hemiLight.intensity = 0.4;
+    else hemiLight.intensity = 0.45;
+  }
   updateDayNight(0);
   applyGraphicsSettings();
 }
@@ -977,6 +1156,7 @@ function themeTint() {
   if (id === 'canyon') return [1.25, 0.75, 0.45];
   if (id === 'storm') return [0.75, 0.85, 1.25];
   if (id === 'void') return [0.85, 0.65, 1.2];
+  if (id === 'wilds') return [0.85, 1.05, 0.7];
   return [0.9, 0.85, 1.2]; // neon
 }
 
@@ -1345,28 +1525,52 @@ function buildViewModel() {
   viewHolder = new THREE.Group();
   camera.add(viewHolder);
   scene.add(camera);
+  // Local key light so PBR guns stay readable in dark biomes (does not affect world)
+  const gunKey = new THREE.DirectionalLight(0xfff2e0, 0.85);
+  gunKey.position.set(0.4, 0.8, 0.6);
+  camera.add(gunKey);
+  const gunFill = new THREE.DirectionalLight(0xa0c0ff, 0.28);
+  gunFill.position.set(-0.5, 0.2, 0.3);
+  camera.add(gunFill);
 
-  // Shared materials so the set reads as one art style, not random greys.
-  const mat = {
-    steel: 0x3a414c,
-    steelHi: 0x5c6674,
-    steelLo: 0x252a32,
-    wood: 0x8b6239,
-    woodDark: 0x5c3d22,
-    polymer: 0x2a2e36,
-    accent: 0xffc53d,
-    accentDim: 0xc49a2e,
-    copper: 0x8a6a45,
-    glass: 0x1a3040,
-    mag: 0x1e242c,
+  // Physically-based gun materials (visual only — aim/fire logic unchanged).
+  const M = {
+    steel: new THREE.MeshStandardMaterial({ color: 0x4a5560, metalness: 0.82, roughness: 0.38 }),
+    steelHi: new THREE.MeshStandardMaterial({ color: 0x6a7684, metalness: 0.88, roughness: 0.28 }),
+    steelLo: new THREE.MeshStandardMaterial({ color: 0x2a3038, metalness: 0.75, roughness: 0.48 }),
+    blued: new THREE.MeshStandardMaterial({ color: 0x1a2230, metalness: 0.9, roughness: 0.32 }),
+    polymer: new THREE.MeshStandardMaterial({ color: 0x1c2028, metalness: 0.12, roughness: 0.72 }),
+    polymerTan: new THREE.MeshStandardMaterial({ color: 0x6a5a48, metalness: 0.08, roughness: 0.78 }),
+    wood: new THREE.MeshStandardMaterial({ color: 0x8b6239, metalness: 0.05, roughness: 0.82 }),
+    woodDark: new THREE.MeshStandardMaterial({ color: 0x4a3018, metalness: 0.05, roughness: 0.88 }),
+    mag: new THREE.MeshStandardMaterial({ color: 0x14181e, metalness: 0.35, roughness: 0.55 }),
+    brass: new THREE.MeshStandardMaterial({ color: 0xb8923a, metalness: 0.85, roughness: 0.35 }),
+    glass: new THREE.MeshStandardMaterial({
+      color: 0x0a1820, metalness: 0.2, roughness: 0.08,
+      transparent: true, opacity: 0.55, emissive: 0x041018, emissiveIntensity: 0.15,
+    }),
+    accent: new THREE.MeshStandardMaterial({ color: 0xffc53d, metalness: 0.55, roughness: 0.4, emissive: 0x3a2800, emissiveIntensity: 0.25 }),
+    rubber: new THREE.MeshStandardMaterial({ color: 0x121418, metalness: 0.05, roughness: 0.92 }),
+    olive: new THREE.MeshStandardMaterial({ color: 0x2f6b32, metalness: 0.2, roughness: 0.65 }),
+    oliveDark: new THREE.MeshStandardMaterial({ color: 0x1e4a22, metalness: 0.2, roughness: 0.7 }),
+    smokeBody: new THREE.MeshStandardMaterial({ color: 0x8a929c, metalness: 0.45, roughness: 0.5 }),
+    flashBody: new THREE.MeshStandardMaterial({ color: 0xc8b060, metalness: 0.55, roughness: 0.42 }),
+    rocket: new THREE.MeshStandardMaterial({ color: 0xc45a20, metalness: 0.4, roughness: 0.5 }),
+    warhead: new THREE.MeshStandardMaterial({ color: 0xff6b2d, metalness: 0.5, roughness: 0.4, emissive: 0x401000, emissiveIntensity: 0.2 }),
+    stripe: new THREE.MeshStandardMaterial({ color: 0x3ecf7a, metalness: 0.3, roughness: 0.45 }),
   };
-  const mk = (parent, w, h, d, color, x, y, z, rx = 0, ry = 0, rz = 0) => {
-    const m = new THREE.Mesh(
-      new THREE.BoxGeometry(w, h, d),
-      new THREE.MeshBasicMaterial({ color })
-    );
+  const box = (parent, w, h, d, mat, x, y, z, rx = 0, ry = 0, rz = 0) => {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
     m.position.set(x, y, z);
     if (rx || ry || rz) m.rotation.set(rx, ry, rz);
+    m.castShadow = false;
+    parent.add(m);
+    return m;
+  };
+  const cyl = (parent, rTop, rBot, h, mat, x, y, z, rx = 0, ry = 0, rz = 0, seg = 10) => {
+    const m = new THREE.Mesh(new THREE.CylinderGeometry(rTop, rBot, h, seg), mat);
+    m.position.set(x, y, z);
+    m.rotation.set(rx, ry, rz);
     parent.add(m);
     return m;
   };
@@ -1375,146 +1579,139 @@ function buildViewModel() {
    * Real iron sights you can look through.
    * Sight line is local Y = sy (usually 0). Body sits BELOW that so ADS center is open.
    * Rear = peep ring (open hole). Front = thin post. Camera looks −Z through both.
+   * Geometry positions unchanged so aim feel stays the same.
    */
   const addIronSights = (parent, { sy = 0, rearZ = -0.06, frontZ = -0.52, peep = 0.028 } = {}) => {
-    const steel = mat.steelHi;
-    const dark = mat.steelLo;
-    // Rear peep — open ring; center of ring is on the aim axis (y = sy)
     const rear = new THREE.Mesh(
       new THREE.RingGeometry(peep * 0.48, peep, 22),
-      new THREE.MeshBasicMaterial({
-        color: steel, side: THREE.DoubleSide, depthTest: true, depthWrite: true,
-      })
+      M.steelHi
     );
+    rear.material = M.steelHi.clone();
+    rear.material.side = THREE.DoubleSide;
     rear.position.set(0, sy, rearZ);
     rear.name = 'sightRear';
     parent.add(rear);
-    // Hood sits around the peep, not in the hole
-    mk(parent, peep * 2.15, peep * 0.2, 0.01, dark, 0, sy + peep * 0.98, rearZ);
-    mk(parent, peep * 0.2, peep * 1.45, 0.01, dark, -peep * 0.98, sy, rearZ);
-    mk(parent, peep * 0.2, peep * 1.45, 0.01, dark, peep * 0.98, sy, rearZ);
-    // Front post stem BELOW the aim axis; yellow tip sits exactly on sy (bullet POA)
-    mk(parent, 0.005, 0.028, 0.005, steel, 0, sy - 0.016, frontZ);
-    const tip = mk(parent, 0.007, 0.007, 0.007, 0xffc53d, 0, sy, frontZ);
+    box(parent, peep * 2.15, peep * 0.2, 0.01, M.steelLo, 0, sy + peep * 0.98, rearZ);
+    box(parent, peep * 0.2, peep * 1.45, 0.01, M.steelLo, -peep * 0.98, sy, rearZ);
+    box(parent, peep * 0.2, peep * 1.45, 0.01, M.steelLo, peep * 0.98, sy, rearZ);
+    box(parent, 0.005, 0.028, 0.005, M.steelHi, 0, sy - 0.016, frontZ);
+    const tip = box(parent, 0.007, 0.007, 0.007, M.accent, 0, sy, frontZ);
     tip.name = 'sightTip';
-    // Wings / base stay below so they don't cover the yellow tip
-    mk(parent, 0.026, 0.004, 0.01, dark, -0.018, sy - 0.03, frontZ);
-    mk(parent, 0.026, 0.004, 0.01, dark, 0.018, sy - 0.03, frontZ);
-    mk(parent, 0.007, 0.018, 0.007, dark, -0.02, sy - 0.02, frontZ);
-    mk(parent, 0.007, 0.018, 0.007, dark, 0.02, sy - 0.02, frontZ);
+    box(parent, 0.026, 0.004, 0.01, M.steelLo, -0.018, sy - 0.03, frontZ);
+    box(parent, 0.026, 0.004, 0.01, M.steelLo, 0.018, sy - 0.03, frontZ);
+    box(parent, 0.007, 0.018, 0.007, M.steelLo, -0.02, sy - 0.02, frontZ);
+    box(parent, 0.007, 0.018, 0.007, M.steelLo, 0.02, sy - 0.02, frontZ);
   };
 
   // Parts tagged adsHide are culled when ADS so they never clip into the camera
-  // (stock/grip/mag sit toward +Z and used to show “inside the gun”).
   const tagHide = (mesh) => { if (mesh) mesh.userData.adsHide = true; return mesh; };
 
-  // ---- RIFLE: body sits BELOW sight line (y=0) so ADS looks through irons ----
+  // ---- RIFLE: cylindrical barrel + PBR furniture (layout matches prior aim setup) ----
   const rifle = new THREE.Group();
-  // Sight line at y=0. Barrel / handguard stay visible under ADS.
-  mk(rifle, 0.05, 0.05, 0.58, mat.steel, 0, -0.055, -0.28);            // barrel
-  mk(rifle, 0.065, 0.035, 0.18, mat.steelHi, 0, -0.03, -0.20);          // handguard top
-  mk(rifle, 0.085, 0.055, 0.16, mat.steelLo, 0, -0.07, -0.16);          // handguard body
-  tagHide(mk(rifle, 0.10, 0.12, 0.26, mat.steelHi, 0, -0.09, 0.06));    // receiver
-  tagHide(mk(rifle, 0.11, 0.03, 0.22, mat.steel, 0, -0.02, 0.04));      // top rail rear
-  tagHide(mk(rifle, 0.05, 0.13, 0.065, mat.mag, 0, -0.20, 0.02));       // mag
-  tagHide(mk(rifle, 0.065, 0.16, 0.07, mat.polymer, 0, -0.22, 0.14));   // grip
-  tagHide(mk(rifle, 0.075, 0.055, 0.18, mat.polymer, 0, -0.08, 0.24));  // stock arm
-  tagHide(mk(rifle, 0.085, 0.11, 0.05, mat.polymer, 0, -0.06, 0.32));   // stock pad
+  cyl(rifle, 0.018, 0.02, 0.58, M.blued, 0, -0.055, -0.28, -Math.PI / 2, 0, 0, 12); // barrel along -Z
+  box(rifle, 0.065, 0.035, 0.18, M.steelHi, 0, -0.03, -0.20);
+  box(rifle, 0.085, 0.055, 0.16, M.steelLo, 0, -0.07, -0.16);
+  // muzzle device
+  cyl(rifle, 0.024, 0.022, 0.045, M.steelHi, 0, -0.055, -0.58, -Math.PI / 2, 0, 0, 10);
+  tagHide(box(rifle, 0.10, 0.12, 0.26, M.steelHi, 0, -0.09, 0.06));
+  tagHide(box(rifle, 0.11, 0.03, 0.22, M.steel, 0, -0.02, 0.04));
+  tagHide(box(rifle, 0.05, 0.13, 0.065, M.mag, 0, -0.20, 0.02));
+  tagHide(box(rifle, 0.065, 0.16, 0.07, M.polymer, 0, -0.22, 0.14));
+  tagHide(box(rifle, 0.075, 0.055, 0.18, M.polymer, 0, -0.08, 0.24));
+  tagHide(box(rifle, 0.085, 0.11, 0.05, M.rubber, 0, -0.06, 0.32));
   addIronSights(rifle, { sy: 0, rearZ: -0.08, frontZ: -0.50, peep: 0.032 });
   rifle.scale.setScalar(0.92);
   viewHolder.add(rifle);
   viewModels.rifle = rifle;
 
-  // ---- SMG: same sight-line convention ----
+  // ---- SMG ----
   const smg = new THREE.Group();
-  mk(smg, 0.045, 0.045, 0.32, mat.steel, 0, -0.045, -0.14);             // barrel
-  mk(smg, 0.07, 0.04, 0.14, mat.steelHi, 0, -0.025, -0.04);             // upper
-  tagHide(mk(smg, 0.10, 0.11, 0.20, mat.polymer, 0, -0.08, 0.06));      // body
-  tagHide(mk(smg, 0.04, 0.18, 0.06, mat.mag, 0, -0.20, 0.04));          // stick mag
-  tagHide(mk(smg, 0.06, 0.14, 0.06, mat.polymer, 0, -0.18, 0.12));      // grip
-  tagHide(mk(smg, 0.06, 0.04, 0.10, mat.steelLo, 0, -0.06, 0.18));      // stock stub
-  mk(smg, 0.025, 0.025, 0.07, mat.steel, 0.035, -0.10, -0.08);          // side rail
+  cyl(smg, 0.016, 0.018, 0.32, M.blued, 0, -0.045, -0.14, -Math.PI / 2, 0, 0, 10);
+  box(smg, 0.07, 0.04, 0.14, M.steelHi, 0, -0.025, -0.04);
+  tagHide(box(smg, 0.10, 0.11, 0.20, M.polymer, 0, -0.08, 0.06));
+  tagHide(box(smg, 0.04, 0.18, 0.06, M.mag, 0, -0.20, 0.04));
+  tagHide(box(smg, 0.06, 0.14, 0.06, M.polymer, 0, -0.18, 0.12));
+  tagHide(box(smg, 0.06, 0.04, 0.10, M.steelLo, 0, -0.06, 0.18));
+  box(smg, 0.025, 0.025, 0.07, M.steel, 0.035, -0.10, -0.08);
+  cyl(smg, 0.02, 0.02, 0.03, M.steelHi, 0, -0.045, -0.30, -Math.PI / 2, 0, 0, 8);
   addIronSights(smg, { sy: 0, rearZ: -0.06, frontZ: -0.34, peep: 0.03 });
   smg.scale.setScalar(0.95);
   smg.visible = false;
   viewHolder.add(smg);
   viewModels.smg = smg;
 
-  // ---- SNIPER: long barrel, wood furniture, glass scope ----
+  // ---- SNIPER: long blued barrel, wood furniture, glass scope ----
   const sniper = new THREE.Group();
-  mk(sniper, 0.045, 0.045, 0.92, mat.steelLo, 0, 0.04, -0.46);         // long barrel
-  mk(sniper, 0.06, 0.03, 0.28, mat.steel, 0, 0.07, -0.28);             // barrel band
-  mk(sniper, 0.10, 0.12, 0.30, mat.wood, 0, -0.02, 0.02);              // wooden receiver
-  mk(sniper, 0.11, 0.08, 0.22, mat.woodDark, 0, -0.04, 0.18);          // stock cheek
-  mk(sniper, 0.10, 0.14, 0.06, mat.woodDark, 0, -0.02, 0.30);          // butt
-  mk(sniper, 0.065, 0.18, 0.08, mat.wood, 0, -0.16, 0.08);             // grip
-  mk(sniper, 0.05, 0.10, 0.06, mat.mag, 0, -0.14, -0.02);              // bolt mag
-  mk(sniper, 0.085, 0.085, 0.26, mat.steelHi, 0, 0.12, -0.02);         // scope tube
-  mk(sniper, 0.07, 0.07, 0.03, mat.glass, 0, 0.12, -0.16);             // objective
-  mk(sniper, 0.055, 0.055, 0.03, mat.glass, 0, 0.12, 0.12);            // ocular
-  mk(sniper, 0.02, 0.04, 0.02, mat.steel, 0, 0.07, -0.06);             // scope mount F
-  mk(sniper, 0.02, 0.04, 0.02, mat.steel, 0, 0.07, 0.06);              // scope mount R
-  mk(sniper, 0.015, 0.09, 0.015, mat.steelHi, -0.04, -0.08, -0.32);    // bipod L
-  mk(sniper, 0.015, 0.09, 0.015, mat.steelHi, 0.04, -0.08, -0.32);     // bipod R
-  mk(sniper, 0.09, 0.02, 0.02, mat.steel, 0, -0.04, -0.32);            // bipod hinge
+  cyl(sniper, 0.016, 0.02, 0.92, M.blued, 0, 0.04, -0.46, -Math.PI / 2, 0, 0, 12);
+  box(sniper, 0.06, 0.03, 0.28, M.steel, 0, 0.07, -0.28);
+  box(sniper, 0.10, 0.12, 0.30, M.wood, 0, -0.02, 0.02);
+  box(sniper, 0.11, 0.08, 0.22, M.woodDark, 0, -0.04, 0.18);
+  box(sniper, 0.10, 0.14, 0.06, M.woodDark, 0, -0.02, 0.30);
+  box(sniper, 0.065, 0.18, 0.08, M.wood, 0, -0.16, 0.08);
+  box(sniper, 0.05, 0.10, 0.06, M.mag, 0, -0.14, -0.02);
+  cyl(sniper, 0.038, 0.038, 0.26, M.steelHi, 0, 0.12, -0.02, -Math.PI / 2, 0, 0, 12);
+  cyl(sniper, 0.032, 0.032, 0.03, M.glass, 0, 0.12, -0.16, -Math.PI / 2, 0, 0, 12);
+  cyl(sniper, 0.026, 0.026, 0.03, M.glass, 0, 0.12, 0.12, -Math.PI / 2, 0, 0, 12);
+  box(sniper, 0.02, 0.04, 0.02, M.steel, 0, 0.07, -0.06);
+  box(sniper, 0.02, 0.04, 0.02, M.steel, 0, 0.07, 0.06);
+  cyl(sniper, 0.006, 0.006, 0.09, M.steelHi, -0.04, -0.08, -0.32, 0, 0, 0, 6);
+  cyl(sniper, 0.006, 0.006, 0.09, M.steelHi, 0.04, -0.08, -0.32, 0, 0, 0, 6);
+  box(sniper, 0.09, 0.02, 0.02, M.steel, 0, -0.04, -0.32);
   sniper.scale.setScalar(0.86);
   sniper.visible = false;
   viewHolder.add(sniper);
   viewModels.sniper = sniper;
 
-  // ---- RPG: tube launcher with optical sight ----
+  // ---- RPG ----
   const rpg = new THREE.Group();
-  mk(rpg, 0.12, 0.12, 0.85, mat.steelLo, 0, 0.04, -0.28);            // tube
-  mk(rpg, 0.14, 0.14, 0.12, mat.steel, 0, 0.04, 0.18);                 // rear ring
-  mk(rpg, 0.14, 0.14, 0.1, mat.steel, 0, 0.04, -0.68);                 // muzzle ring
-  mk(rpg, 0.08, 0.16, 0.1, mat.polymer, 0, -0.12, 0.02);               // grip
-  mk(rpg, 0.06, 0.05, 0.22, mat.wood, 0.02, -0.02, -0.15);             // shoulder rest arm
-  mk(rpg, 0.1, 0.12, 0.04, mat.woodDark, 0.02, 0.02, 0.22);            // pad
-  // Side-rail optic only (hip-fire silhouette). Full ADS uses a 2D scope HUD —
-  // never put a solid red block in the lens path or aiming is pure red.
-  mk(rpg, 0.04, 0.04, 0.12, mat.steelHi, 0.06, 0.12, -0.08);           // optic rail
-  mk(rpg, 0.035, 0.035, 0.03, mat.steel, 0.06, 0.12, -0.15);            // front cap
-  // stowed rocket (hidden when fired — always show in VM for now)
-  const rocketVm = mk(rpg, 0.07, 0.07, 0.28, 0xc45a20, 0, 0.04, -0.45);
+  cyl(rpg, 0.055, 0.055, 0.85, M.steelLo, 0, 0.04, -0.28, -Math.PI / 2, 0, 0, 14);
+  cyl(rpg, 0.062, 0.062, 0.12, M.steel, 0, 0.04, 0.18, -Math.PI / 2, 0, 0, 12);
+  cyl(rpg, 0.062, 0.062, 0.1, M.steel, 0, 0.04, -0.68, -Math.PI / 2, 0, 0, 12);
+  box(rpg, 0.08, 0.16, 0.1, M.polymer, 0, -0.12, 0.02);
+  box(rpg, 0.06, 0.05, 0.22, M.wood, 0.02, -0.02, -0.15);
+  box(rpg, 0.1, 0.12, 0.04, M.woodDark, 0.02, 0.02, 0.22);
+  box(rpg, 0.04, 0.04, 0.12, M.steelHi, 0.06, 0.12, -0.08);
+  box(rpg, 0.035, 0.035, 0.03, M.steel, 0.06, 0.12, -0.15);
+  const rocketVm = cyl(rpg, 0.032, 0.032, 0.28, M.rocket, 0, 0.04, -0.45, -Math.PI / 2, 0, 0, 10);
   rocketVm.name = 'rpgRocket';
-  mk(rpg, 0.09, 0.09, 0.04, 0xff6b2d, 0, 0.04, -0.58);                 // warhead tip
+  cyl(rpg, 0.04, 0.02, 0.06, M.warhead, 0, 0.04, -0.60, -Math.PI / 2, 0, 0, 10);
   rpg.scale.setScalar(0.9);
   rpg.visible = false;
   viewHolder.add(rpg);
   viewModels.rpg = rpg;
 
-  // ---- GRENADE (HE): segmented “pineapple” + spoon ----
+  // ---- GRENADE ----
   const grenade = new THREE.Group();
-  mk(grenade, 0.11, 0.14, 0.11, 0x2f6b32, 0, 0, 0);                    // body
-  mk(grenade, 0.12, 0.04, 0.12, 0x245028, 0, 0.05, 0);                  // band
-  mk(grenade, 0.12, 0.04, 0.12, 0x245028, 0, -0.04, 0);
-  mk(grenade, 0.05, 0.06, 0.05, mat.steelHi, 0, 0.1, 0);               // fuse neck
-  mk(grenade, 0.03, 0.08, 0.02, mat.steel, 0.04, 0.12, 0.02, 0, 0, 0.4); // spoon
-  mk(grenade, 0.02, 0.02, 0.02, mat.accent, 0, 0.14, 0);               // pin ring
+  cyl(grenade, 0.052, 0.055, 0.12, M.olive, 0, 0, 0, 0, 0, 0, 12);
+  box(grenade, 0.12, 0.04, 0.12, M.oliveDark, 0, 0.05, 0);
+  box(grenade, 0.12, 0.04, 0.12, M.oliveDark, 0, -0.04, 0);
+  cyl(grenade, 0.02, 0.022, 0.05, M.steelHi, 0, 0.1, 0, 0, 0, 0, 8);
+  box(grenade, 0.03, 0.08, 0.02, M.steel, 0.04, 0.12, 0.02, 0, 0, 0.4);
+  box(grenade, 0.02, 0.02, 0.02, M.accent, 0, 0.14, 0);
   grenade.scale.setScalar(1.05);
   grenade.visible = false;
   viewHolder.add(grenade);
   viewModels.grenade = grenade;
 
-  // ---- SMOKE: tall canister ----
+  // ---- SMOKE ----
   const smokeG = new THREE.Group();
-  mk(smokeG, 0.09, 0.18, 0.09, 0x8a929c, 0, 0, 0);
-  mk(smokeG, 0.1, 0.03, 0.1, 0x6a727c, 0, 0.08, 0);
-  mk(smokeG, 0.1, 0.03, 0.1, 0x6a727c, 0, -0.08, 0);
-  mk(smokeG, 0.04, 0.05, 0.04, mat.steel, 0, 0.12, 0);
-  mk(smokeG, 0.11, 0.04, 0.02, 0x3ecf7a, 0, 0.02, 0.055);              // green stripe
+  cyl(smokeG, 0.042, 0.042, 0.18, M.smokeBody, 0, 0, 0, 0, 0, 0, 12);
+  box(smokeG, 0.1, 0.03, 0.1, M.steelLo, 0, 0.08, 0);
+  box(smokeG, 0.1, 0.03, 0.1, M.steelLo, 0, -0.08, 0);
+  cyl(smokeG, 0.018, 0.018, 0.04, M.steel, 0, 0.12, 0, 0, 0, 0, 8);
+  box(smokeG, 0.11, 0.04, 0.02, M.stripe, 0, 0.02, 0.055);
   smokeG.visible = false;
   viewHolder.add(smokeG);
   viewModels.smoke = smokeG;
 
-  // ---- FLASH: short cylinder + vents ----
+  // ---- FLASH ----
   const flashG = new THREE.Group();
-  mk(flashG, 0.1, 0.13, 0.1, 0xc8b060, 0, 0, 0);
-  mk(flashG, 0.11, 0.03, 0.11, mat.steelHi, 0, 0.06, 0);
-  mk(flashG, 0.11, 0.03, 0.11, mat.steelHi, 0, -0.06, 0);
-  mk(flashG, 0.03, 0.04, 0.03, mat.steel, 0, 0.1, 0);
-  mk(flashG, 0.02, 0.06, 0.02, 0x22262c, 0.05, 0, 0);                  // vents
-  mk(flashG, 0.02, 0.06, 0.02, 0x22262c, -0.05, 0, 0);
+  cyl(flashG, 0.048, 0.048, 0.13, M.flashBody, 0, 0, 0, 0, 0, 0, 12);
+  box(flashG, 0.11, 0.03, 0.11, M.steelHi, 0, 0.06, 0);
+  box(flashG, 0.11, 0.03, 0.11, M.steelHi, 0, -0.06, 0);
+  cyl(flashG, 0.014, 0.014, 0.04, M.steel, 0, 0.1, 0, 0, 0, 0, 8);
+  box(flashG, 0.02, 0.06, 0.02, M.polymer, 0.05, 0, 0);
+  box(flashG, 0.02, 0.06, 0.02, M.polymer, -0.05, 0, 0);
   flashG.visible = false;
   viewHolder.add(flashG);
   viewModels.flash = flashG;
@@ -3418,6 +3615,17 @@ function frame() {
   // Keep sky dome glued to camera so infinite terrain has no hard horizon wall
   if (skyMesh && camera) skyMesh.position.copy(camera.position);
   updateDayNight(dt);
+  // Living biomes + material pulse
+  if (worldMat?.userData?.shader) {
+    worldMat.userData.shader.uniforms.uTime.value = performance.now() * 0.001;
+    if (themeSkyBase?.life != null) {
+      worldMat.userData.shader.uniforms.uLife.value = themeSkyBase.life;
+    }
+  }
+  if (biomeLife && world && me) {
+    biomeLife.particlesEnabled = settings.particles !== false;
+    biomeLife.update(dt, world, me.x, me.y, me.z);
+  }
   updateCompass();
   updateRemotes(dt);
   updateTracers(dt);

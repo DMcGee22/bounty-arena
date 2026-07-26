@@ -72,7 +72,8 @@
   // ---- world (chunked, infinite XZ, multi-theme) -----------------------------
 
   const CHUNK = 16;
-  // Extreme biome set — huge amp / personality so sector morphs feel like a new game
+  // Extreme biome set — huge amp / personality so sector morphs feel like a new game.
+  // `smooth: true` → client renders continuous heightfield terrain (experimental).
   const THEMES = [
     { id: 'neon',     name: 'NEON SPIRE MEGA',   base: 12, amp: 9.5,  wet: 0, cold: 0, harsh: 1 },
     { id: 'forest',   name: 'TITAN CANOPY',      base: 14, amp: 12.0, wet: 1, cold: 0, harsh: 0 },
@@ -84,6 +85,8 @@
     { id: 'canyon',   name: 'GOD CANYON',        base: 18, amp: 18.0, wet: 0, cold: 0, harsh: 1 },
     { id: 'storm',    name: 'STORM CROWN',       base: 13, amp: 11.0, wet: 1, cold: 0, harsh: 1 },
     { id: 'void',     name: 'VOID SHELF',        base: 9,  amp: 10.0, wet: 0, cold: 1, harsh: 1 },
+    // Experimental: rolling natural hills — not a mega-city block world
+    { id: 'wilds',    name: 'OPEN WILDS',        base: 12, amp: 5.5,  wet: 1, cold: 0, harsh: 0, smooth: true },
   ];
 
   // Pick a theme from seed/epoch. Optionally skip a previous id so morphs never
@@ -221,6 +224,7 @@
         canyon:   ['bridge', 'cliff_pad', 'mesa', 'ruin_keep', 'tower', 'bridge'],
         storm:    ['tower', 'spire', 'plaza_deck', 'walkway', 'fort', 'tower'],
         void:     ['spire', 'mesa', 'deck', 'tower', 'bridge', 'spire'],
+        wilds:    ['ruins', 'ruin_keep', 'deck', 'cliff_pad', 'bridge', 'ruins'],
       };
       const kinds = kits[tid] || kits.neon;
 
@@ -253,13 +257,15 @@
       return list;
     }
 
-    // Theme-aware column height — extreme vertical drama per biome
-    columnHeight(x, z) {
+    // Continuous height field (float). Integer collision uses floor().
+    heightField(x, z) {
       const th = this.theme;
       const salt = this.layoutSalt();
       const ox = (hash2(11, 1, salt) - 0.5) * 800;
       const oz = (hash2(11, 2, salt) - 0.5) * 800;
-      const sc = 0.35 + hash2(11, 3, salt) * 1.4; // wilder frequency swing
+      const sc = th.smooth
+        ? 0.55 + hash2(11, 3, salt) * 0.55   // calmer frequencies for natural hills
+        : 0.35 + hash2(11, 3, salt) * 1.4;
       const rot = hash2(11, 4, salt) * Math.PI * 2;
       const cosR = Math.cos(rot), sinR = Math.sin(rot);
       const rx = (x + ox) * cosR - (z + oz) * sinR;
@@ -267,17 +273,17 @@
       const seed = salt;
       const scaleA = 22 / sc;
       const scaleB = 9 / sc;
-      const n = fbm(rx / scaleA, rz / scaleA, seed, 5);
-      const ridge = fbm(rx / scaleB + 40, rz / scaleB + 40, seed + 19, 4);
+      const n = fbm(rx / scaleA, rz / scaleA, seed, th.smooth ? 6 : 5);
+      const ridge = fbm(rx / scaleB + 40, rz / scaleB + 40, seed + 19, th.smooth ? 5 : 4);
       const warp = fbm(rx / 55, rz / 55, seed + 101, 3);
-      // Big elevation shifts between sectors (was ±3, now ±10)
-      const baseShift = Math.floor((hash2(11, 5, salt) - 0.5) * 20);
-      let height = Math.floor(
+      const baseShift = th.smooth
+        ? (hash2(11, 5, salt) - 0.5) * 6
+        : Math.floor((hash2(11, 5, salt) - 0.5) * 20);
+      let height =
         (th.base + baseShift)
         + n * th.amp * (1.1 + hash2(11, 6, salt) * 0.7)
-        + ridge * (th.harsh ? 5.5 : 2.8)
-        + (warp - 0.5) * th.amp * 0.55
-      );
+        + ridge * (th.harsh ? 5.5 : (th.smooth ? 1.4 : 2.8))
+        + (warp - 0.5) * th.amp * (th.smooth ? 0.28 : 0.55);
 
       // —— Extreme theme personalities ——
       if (th.id === 'canyon') {
@@ -338,6 +344,13 @@
         const shelf = fbm(rx / 16, rz / 16, seed + 303, 4);
         if (shelf < 0.45) height = Math.max(3, 4 + Math.floor(shelf * 6));
         else height = Math.min(this.h - 10, height + 6 + Math.floor((shelf - 0.45) * 22));
+      } else if (th.id === 'wilds') {
+        // Broad rolling hills + gentle valleys (continuous, not terraced)
+        const roll = fbm(rx / 38, rz / 38, seed + 501, 5);
+        const detail = fbm(rx / 11, rz / 11, seed + 502, 3);
+        height = th.base + baseShift + roll * th.amp * 1.6 + (detail - 0.5) * 2.2;
+        const valley = fbm(rx / 48, rz / 48, seed + 503, 3);
+        if (valley < 0.32) height -= (0.32 - valley) * 7;
       }
 
       // Hub plaza flatten — still fightable, not totally flat pancake
@@ -346,24 +359,32 @@
       if (dist0 < plazaR) {
         const t = dist0 / plazaR;
         const padH = Math.max(8, Math.min(this.h - 20, th.base + Math.floor(baseShift * 0.35)));
-        height = Math.round(height * smooth(t) * 0.55 + padH * (1 - smooth(t) * 0.55));
+        height = height * smooth(t) * 0.55 + padH * (1 - smooth(t) * 0.55);
+        if (!th.smooth) height = Math.round(height);
       }
-      // Soft roads
-      const roadMode = Math.floor(hash2(12, 2, salt) * 4);
-      const roadLen = 50 + Math.floor(hash2(12, 3, salt) * 70);
-      if (dist0 < roadLen) {
-        let onRoad = false;
-        if (roadMode === 0) onRoad = Math.abs(x) <= 2 || Math.abs(z) <= 2;
-        else if (roadMode === 1) onRoad = Math.abs(x - z) <= 2 || Math.abs(x + z) <= 2;
-        else if (roadMode === 2) onRoad = (hash2(12, 4, salt) < 0.5 ? Math.abs(x) <= 2 : Math.abs(z) <= 2);
-        if (onRoad) {
-          const padH = Math.max(6, th.base + Math.floor(baseShift * 0.3));
-          height = Math.round(height * 0.35 + padH * 0.65);
+      // Soft roads (skip heavy flattening on natural wilds)
+      if (!th.smooth) {
+        const roadMode = Math.floor(hash2(12, 2, salt) * 4);
+        const roadLen = 50 + Math.floor(hash2(12, 3, salt) * 70);
+        if (dist0 < roadLen) {
+          let onRoad = false;
+          if (roadMode === 0) onRoad = Math.abs(x) <= 2 || Math.abs(z) <= 2;
+          else if (roadMode === 1) onRoad = Math.abs(x - z) <= 2 || Math.abs(x + z) <= 2;
+          else if (roadMode === 2) onRoad = (hash2(12, 4, salt) < 0.5 ? Math.abs(x) <= 2 : Math.abs(z) <= 2);
+          if (onRoad) {
+            const padH = Math.max(6, th.base + Math.floor(baseShift * 0.3));
+            height = Math.round(height * 0.35 + padH * 0.65);
+          }
         }
       }
       if (height < 3) height = 3;
       if (height > this.h - 8) height = this.h - 8;
       return height;
+    }
+
+    // Integer height for voxel fill / collision
+    columnHeight(x, z) {
+      return Math.floor(this.heightField(x, z));
     }
 
     surfaceBlock(x, z, height) {
@@ -378,6 +399,7 @@
       if (th.id === 'storm') return height > th.base + 8 ? IRON : STONE;
       if (th.id === 'forest') return GRASS;
       if (th.id === 'farm') return GRASS;
+      if (th.id === 'wilds') return GRASS;
       if (th.id === 'neon') return ((x + z) & 1) ? IRON : STONE;
       return GRASS;
     }
@@ -832,7 +854,11 @@
       if (Math.hypot(wx, wz) < 22) return;
 
       // Dense biome scatter — giants + cover
-      const count = tid === 'forest' ? 14 : tid === 'neon' || tid === 'storm' ? 10 : 8;
+      // Wilds keeps voxel deco light (client adds soft grass/trees for the natural look)
+      const count = tid === 'forest' ? 14
+        : tid === 'wilds' ? 5
+        : tid === 'neon' || tid === 'storm' ? 10
+        : 8;
       for (let i = 0; i < count; i++) {
         const lx = Math.floor(hash2(cx * 13 + i, cz * 7, seed) * cs);
         const lz = Math.floor(hash2(cz * 9 + i, cx * 3, seed) * cs);
@@ -844,6 +870,18 @@
         }
         if (g < 2 || g >= this.h - 14) continue;
         const roll = hash2(x, z, seed);
+
+        if (tid === 'wilds' && roll < 0.55) {
+          // Sparse rock spines / stump cover — rest is client soft props
+          if (roll < 0.22) {
+            const h = 1 + Math.floor(roll * 4);
+            for (let y = g; y < g + h && y < this.h - 2; y++) setL(lx, y, lz, STONE);
+          } else if (roll < 0.4) {
+            setL(lx, g, lz, LOG);
+            setL(lx, g + 1, lz, LOG);
+          }
+          continue;
+        }
 
         if (tid === 'forest' && roll < 0.75) {
           // Titan trees
