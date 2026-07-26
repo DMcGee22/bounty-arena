@@ -330,41 +330,33 @@ function meshSmoothHeightfield(world, cx, cz, chunkSize, atlasCols, pos, uv, col
   const tv = 1 - (Math.floor(tileIdx / atlasCols) + 1) * tileSpan;
   const x0 = cx * chunkSize, z0 = cz * chunkSize;
 
-  // Live surface: walk down from generated height so explosions carve the mesh
-  const surf = (x, z) => {
-    const gen = world.columnHeight(x, z);
-    for (let y = gen; y >= 0; y--) {
-      if (world.isSolid(x, y, z)) return y + 1;
-    }
-    // Empty column — still show a low plane
-    return Math.max(1, world.heightField ? world.heightField(x, z) : gen);
-  };
-  // Corner height = average of up to 4 neighboring cell surfaces (smooth slopes)
+  // Walk height: top of solid collision column (matches feet).
+  // Prefer continuous heightField for roll; fall back to solids if dug out.
   const cornerH = (x, z) => {
-    const samples = [
-      surf(x - 1, z - 1), surf(x, z - 1),
-      surf(x - 1, z), surf(x, z),
-    ];
-    // Prefer continuous field when no digs (gen matches solid)
-    if (world.heightField) {
-      const hf = world.heightField(x, z);
-      const avg = (samples[0] + samples[1] + samples[2] + samples[3]) * 0.25;
-      // Blend: heightfield for natural roll, solid surface for crater fidelity
-      const dug = Math.abs(avg - (hf + 1)) > 0.85;
-      return dug ? avg : (hf + 1);
+    let hf = null;
+    if (typeof world.heightField === 'function') {
+      try { hf = world.heightField(x, z); } catch { hf = null; }
     }
-    return (samples[0] + samples[1] + samples[2] + samples[3]) * 0.25;
+    // solidSurfaceY = top solid + 1 (standing height)
+    const solidTop = world.solidSurfaceY(x, z);
+    if (hf == null || !Number.isFinite(hf)) return solidTop;
+    // heightField is top-block Y-ish continuous; +1 matches solidSurfaceY convention
+    const visual = hf + 1;
+    // If digs removed terrain, stick to actual solids
+    if (solidTop + 0.01 < visual - 0.9) return solidTop;
+    return visual;
   };
 
   let vcount = getV();
   for (let lz = 0; lz < chunkSize; lz++) {
     for (let lx = 0; lx < chunkSize; lx++) {
       const x = x0 + lx, z = z0 + lz;
+      // Sample at cell corners (integer grid) for continuous slopes
       const h00 = cornerH(x, z);
       const h10 = cornerH(x + 1, z);
       const h01 = cornerH(x, z + 1);
       const h11 = cornerH(x + 1, z + 1);
-      // Two triangles; compute normals from edges
+      // Quad corners in XZ
       const verts = [
         [x, h00, z],
         [x + 1, h10, z],
@@ -378,34 +370,43 @@ function meshSmoothHeightfield(world, cx, cz, chunkSize, atlasCols, pos, uv, col
         let nx = (by - ay) * (cz_ - az) - (bz - az) * (cy - ay);
         let ny = (bz - az) * (cx_ - ax) - (bx - ax) * (cz_ - az);
         let nz = (bx - ax) * (cy - ay) - (by - ay) * (cx_ - ax);
+        // CRITICAL: FrontSide materials cull back faces. Winding must face UP
+        // (previous order produced ny≈-1 on flat ground → invisible terrain).
+        if (ny < 0) {
+          nx = -nx; ny = -ny; nz = -nz;
+          // swap b/c by emitting c,b instead
+          const tmp = b; b = c; c = tmp;
+        }
         const nl = Math.hypot(nx, ny, nz) || 1;
         nx /= nl; ny /= nl; nz /= nl;
-        // Face upward-ish lighting
-        const light = 0.55 + 0.45 * Math.max(0, ny);
+        const light = 0.62 + 0.45 * Math.max(0.15, ny);
         const base = vcount;
-        for (const vi of [a, b, c]) {
+        // Re-read verts after possible b/c swap for correct order
+        const order = [a, b, c];
+        for (let oi = 0; oi < 3; oi++) {
+          const vi = order[oi];
           const [px, py, pz] = verts[vi];
           pos.push(px, py, pz);
           nrm.push(nx, ny, nz);
-          const u = vi === 0 || vi === 3 ? 0 : 1;
-          const v = vi === 0 || vi === 1 ? 0 : 1;
+          const u = (vi === 1 || vi === 2) ? 1 : 0;
+          const v = (vi === 2 || vi === 3) ? 1 : 0;
           uv.push(tu + (u ? tileSpan - inset : inset), tv + (v ? tileSpan - inset : inset));
-          // Earthy green tint with slope darkening
-          const slope = 1 - Math.min(0.35, Math.abs(1 - ny) * 0.5);
+          const slope = 1 - Math.min(0.3, Math.abs(1 - ny) * 0.45);
           col.push(
-            light * 0.72 * tt[0] * slope,
-            light * 0.95 * tt[1] * slope,
-            light * 0.55 * tt[2] * slope
+            light * 0.78 * tt[0] * slope,
+            light * 1.05 * tt[1] * slope,
+            light * 0.58 * tt[2] * slope
           );
         }
         idx.push(base, base + 1, base + 2);
         vcount += 3;
       };
-      // Flip diagonal for smoother silhouette on ridges
+      // CCW when viewed from above for flat ground: (0,2,1) and (0,3,2)
+      // (0,1,2) was CW from above → normals pointed into the earth)
       if (Math.abs(h00 - h11) < Math.abs(h10 - h01)) {
-        pushTri(0, 1, 2); pushTri(0, 2, 3);
+        pushTri(0, 2, 1); pushTri(0, 3, 2);
       } else {
-        pushTri(0, 1, 3); pushTri(1, 2, 3);
+        pushTri(0, 3, 1); pushTri(1, 3, 2);
       }
     }
   }
